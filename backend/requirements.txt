@@ -1,0 +1,16 @@
+# Runtime dependencies
+fastapi==0.104.1
+uvicorn==0.24.0
+sqlalchemy==2.0.23
+pydantic==2.5.2
+pydantic-settings==2.1.0
+python-dotenv==1.0.0
+
+# SerpApi client (provides the `serpapi` module)
+google-search-results==2.4.2
+
+# Used directly by app/services/live_price_service.py to resolve a canonical
+# provider location. Previously only present transitively via
+# google-search-results; declared explicitly so an upstream change cannot
+# break the application.
+requests==2.34.2

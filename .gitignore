@@ -1,0 +1,69 @@
+# ---------------------------------------------------------------- secrets
+# Never commit real credentials. .env.example carries placeholders only.
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------- python
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+
+# ---------------------------------------------------------------- node
+node_modules/
+dist/
+dist-ssr/
+.vite/
+*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ---------------------------------------------------------------- databases
+# backend/data/market_radar.db is the local application database. It holds
+# cached third-party responses and API usage history, changes constantly, and
+# is environment-specific, so it is deliberately NOT tracked. The directory
+# itself is kept via data/.gitkeep so a fresh clone still has somewhere to
+# create it.
+*.db
+*.sqlite
+*.sqlite3
+!.gitkeep
+
+# ---------------------------------------------------------------- local only
+# Staged removals awaiting confirmation; not part of the project.
+_quarantine/
+
+# ---------------------------------------------------------------- demo video
+# Rendered MP4 (~50 MB): upload to YouTube/Drive and link it instead of committing.
+demo-video/
+*.mp4
+
+# ---------------------------------------------------------------- local tooling
+# Machine-specific launch config (absolute Windows paths); not portable.
+.claude/
+
+# ---------------------------------------------------------------- editors / os
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ---------------------------------------------------------------- logs / temp
+logs/
+*.log
+*.bak
+*.old
+*.tmp

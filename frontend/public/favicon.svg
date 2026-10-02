@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="MarketRadar">
+  <title>MarketRadar</title>
+  <defs>
+    <!-- Blue where the sweep begins, green where the needle points: the
+         gradient runs bottom-left to top-right so the mark reads as movement. -->
+    <linearGradient id="mr-grad" x1="0" y1="1" x2="1" y2="0">
+      <stop offset="0%" stop-color="#1D4ED8"/>
+      <stop offset="45%" stop-color="#0EA5E9"/>
+      <stop offset="100%" stop-color="#4ADE80"/>
+    </linearGradient>
+
+    <!-- Cuts a margin around the bars out of the rings behind them. Without
+         this the two shapes share a gradient and merge into one blob; the
+         knockout keeps them legible on any background, light or dark. -->
+    <mask id="mr-bar-cut">
+      <rect width="64" height="64" fill="#fff"/>
+      <rect x="21.5" y="37.5" width="12.5" height="18" rx="5" fill="#000"/>
+      <rect x="31.5" y="30.5" width="12.5" height="25" rx="5" fill="#000"/>
+      <rect x="41.5" y="23.5" width="12.5" height="32" rx="5" fill="#000"/>
+    </mask>
+  </defs>
+
+  <g transform="translate(1.7 2.3)">
+  <!-- Radar rings. Each dash gap is rotated to sit under the needle, so the
+       needle breaks out of the sweep rather than crossing it. -->
+  <g fill="none" stroke="url(#mr-grad)" stroke-linecap="round" mask="url(#mr-bar-cut)">
+    <circle cx="30" cy="30" r="23" stroke-width="6"
+            stroke-dasharray="124.4 20.1" transform="rotate(-20 30 30)"/>
+    <circle cx="30" cy="30" r="14.5" stroke-width="5.5"
+            stroke-dasharray="77.2 13.9" transform="rotate(-17.5 30 30)"/>
+  </g>
+
+  <!-- Needle. Drawn outside the mask: it clears the bars on its own, and
+       masking it would nibble the hub. -->
+  <g stroke="url(#mr-grad)" stroke-linecap="round">
+    <line x1="30" y1="30" x2="46" y2="14" stroke-width="5.5"/>
+    <circle cx="30" cy="30" r="3.4" fill="url(#mr-grad)" stroke="none"/>
+    <circle cx="48.6" cy="11.4" r="5" fill="url(#mr-grad)" stroke="none"/>
+  </g>
+
+  <!-- Ascending bars, sitting in the knockout. -->
+  <g fill="url(#mr-grad)">
+    <rect x="24" y="40" width="7.5" height="13" rx="2.6"/>
+    <rect x="34" y="33" width="7.5" height="20" rx="2.6"/>
+    <rect x="44" y="26" width="7.5" height="27" rx="2.6"/>
+  </g>
+  </g>
+</svg>
