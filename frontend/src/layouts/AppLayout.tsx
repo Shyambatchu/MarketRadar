@@ -18,6 +18,7 @@ import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
 import Logo from '../components/Logo/Logo';
 
 import StatusIndicator from '../components/StatusIndicator/StatusIndicator';
+import CreditMeter from '../components/CreditMeter/CreditMeter';
 import api from '../services/api';
 import { isAxiosError } from 'axios';
 
@@ -150,6 +151,7 @@ const AppLayout = () => {
       </Box>
 
       <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
+        {backendStatus === 'connected' && <CreditMeter refreshKey={location.pathname} />}
         <StatusIndicator status={backendStatus} />
       </Box>
     </Box>

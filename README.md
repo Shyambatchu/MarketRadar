@@ -28,6 +28,7 @@ twice is not a trend.
 
 | Module | Page | Endpoint(s) | Spends SerpApi credits? |
 |---|---|---|---|
+| Dashboard | `/` | `GET /api/trends/summary`, `/api/serpapi/usage` | **No** — reads stored observations and the free account endpoint |
 | Market Research | `/research` | `GET /api/serpapi/search`, `/api/serpapi/recent` | Yes, 1 per uncached search |
 | Competitors | `/competitors` | `GET /api/competitors/search`, `/api/competitors` | Yes, 1 per uncached search |
 | Products | `/products` | `GET /api/products/search`, `/api/products` | Yes, 1 + up to 5 (one per merchant) |
@@ -133,14 +134,76 @@ when the API is reachable. Copying `.env` is optional: the frontend defaults to
 
 ### 4.3 Every later run
 
+Start the backend with **one** of the two commands below, then the frontend.
+Run each from the project root.
+
+**Terminal 1, option A: demo data** (no API key, no credits; recommended for
+a first look, because the Trends charts have real movements to show):
+
 ```powershell
-# terminal 1
-cd backend; .\venv\Scripts\Activate.ps1; uvicorn app.main:app --reload --port 8001
-# terminal 2
+cd backend; .\venv\Scripts\Activate.ps1; $env:DATABASE_URL="sqlite:///./data/demo_market_radar.db"; uvicorn app.main:app --reload --port 8001
+```
+
+Create the demo database once beforehand with
+`python scripts\seed_demo_data.py` (see 6.2).
+
+**Terminal 1, option B: your real data**
+
+```powershell
+cd backend; .\venv\Scripts\Activate.ps1; Remove-Item Env:DATABASE_URL -ErrorAction SilentlyContinue; uvicorn app.main:app --reload --port 8001
+```
+
+**Terminal 2: frontend**
+
+```powershell
 cd frontend; npm run dev
 ```
 
-(On macOS/Linux, use `source venv/bin/activate` and `&&` instead of `;`.)
+Open <http://localhost:5173>. `$env:DATABASE_URL` lasts only for that
+terminal window, so closing it returns you to the real database.
+
+macOS / Linux:
+
+```bash
+# terminal 1, demo data
+cd backend && source venv/bin/activate && DATABASE_URL=sqlite:///./data/demo_market_radar.db uvicorn app.main:app --reload --port 8001
+# terminal 1, real data
+cd backend && source venv/bin/activate && uvicorn app.main:app --reload --port 8001
+# terminal 2
+cd frontend && npm run dev
+```
+
+### 4.4 Guided tour (5 minutes, demo data)
+
+With the backend on demo data (option A above), this walk-through shows every
+read-only module without spending a credit.
+
+1. **Dashboard (`/`).** Live figures from the database: businesses tracked,
+   markets observed, product observations and verified prices. A bar chart
+   shows observations per market, split by Competitors and Products. The
+   **Search credits** panel shows credits spent, searches answered from the
+   7-day cache (credits saved) and the SerpApi plan usage. A compact version
+   of that meter sits in the sidebar on every page.
+2. **Trends (`/trends`), Prices tab.** *Measured movements* charts the series
+   that actually changed: House Blend Coffee Beans at Sample Bean Co.,
+   $14.99 → $15.99 (+6.67%). In the table, each row has a sparkline; click a
+   row to open its full chart. The Example Roasters row was read twice at the
+   same price, so it is drawn grey as *insufficient history*: one reading seen
+   twice is not a trend.
+3. **Trends, Visibility tab.** Search positions swap between the two
+   searches. The position axis is reversed, so higher on the chart always
+   means a better position, and colour follows meaning (green = better).
+4. **Trends, Merchant presence tab.** A business missing from the latest
+   search is flagged *not in latest*, never *closed*.
+5. **Market Pulse (`/pulse`).** Choose Coffee Shops in Sample City (demo
+   data) for a one-page snapshot of that market.
+6. **AI Analyst (`/analyst`).** Same context. Every statement is computed
+   from data and cites its evidence; nothing is invented.
+7. **Bike Repair** (in Pulse or Analyst). It has only one search, so every
+   series correctly reports *insufficient history*.
+
+With a SerpApi key and real data (option B), use the inputs in 6.3 for
+Competitors, Products, Price Intelligence and Market Research.
 
 ## 5. Run the tests
 

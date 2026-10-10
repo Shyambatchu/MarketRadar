@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Fragment } from 'react';
 import {
-  Alert, Box, Chip, CircularProgress, Grid, Paper, Table, TableBody,
+  Alert, Box, Chip, CircularProgress, Collapse, Grid, IconButton, Paper, Table, TableBody,
   TableCell, TableContainer, TableHead, TableRow, Tab, Tabs, Tooltip,
   Typography,
 } from '@mui/material';
@@ -10,10 +10,13 @@ import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
 import RemoveIcon from '@mui/icons-material/Remove';
 import SwapVertIcon from '@mui/icons-material/SwapVert';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
 import { isAxiosError } from 'axios';
 
 import PageHeader from '../../components/PageHeader/PageHeader';
 import EmptyState from '../../components/EmptyState/EmptyState';
+import TrendChart, { Sparkline } from '../../components/TrendChart/TrendChart';
 import {
   getAvailabilityTrends, getMerchantPresence, getPriceTrends,
   getTrendSummary, getVisibilityTrends,
@@ -70,10 +73,60 @@ const formatValue = (series: TrendSeries, value: number | null): string => {
   if (series.metric === 'availability') {
     return { 1: 'found', 0: 'unknown', '-1': 'not found' }[String(value)] ?? String(value);
   }
+  if (series.metric === 'position') return `#${value}`;
   return String(value);
 };
 
+const formatChange = (s: TrendSeries): string | null => {
+  if (s.status !== 'trend' || s.change_absolute === null) return null;
+  const sign = s.change_absolute > 0 ? '+' : '';
+  const abs = s.metric === 'price' ? `$${s.change_absolute.toFixed(2)}` : String(s.change_absolute);
+  const pct = s.change_percent !== null ? ` (${s.change_percent > 0 ? '+' : ''}${s.change_percent}%)` : '';
+  return `${sign}${abs}${pct}`;
+};
+
+/**
+ * The series that actually moved, charted. Only `trend` series qualify: a
+ * single measurement has no movement to show. Largest relative change first.
+ */
+const Movements = ({ series }: { series: TrendSeries[] }) => {
+  const moved = series
+    .filter((s) => s.status === 'trend' && s.points.length >= 2)
+    .sort((a, b) => Math.abs(b.change_percent ?? 0) - Math.abs(a.change_percent ?? 0))
+    .slice(0, 3);
+  if (moved.length === 0) return null;
+  return (
+    <Box sx={{ mb: 3 }}>
+      <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 1.5, fontWeight: 600 }}>
+        Measured movements
+      </Typography>
+      <Grid container spacing={2}>
+        {moved.map((s, i) => (
+          <Grid key={`${s.subject}-${i}`} size={{ xs: 12, md: moved.length === 1 ? 12 : 6, lg: 12 / moved.length }}>
+            <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 0.5 }}>
+                <DirectionIcon series={s} />
+                <Typography variant="subtitle2" noWrap sx={{ flex: 1 }}>{s.subject}</Typography>
+              </Box>
+              <Typography variant="h6" sx={{ mb: 1 }}>
+                {formatValue(s, s.first_value)} → {formatValue(s, s.last_value)}
+                {formatChange(s) && s.metric !== 'availability' && (
+                  <Typography component="span" variant="body2" color="text.secondary">
+                    {'  '}{formatChange(s)}
+                  </Typography>
+                )}
+              </Typography>
+              <TrendChart series={s} />
+            </Paper>
+          </Grid>
+        ))}
+      </Grid>
+    </Box>
+  );
+};
+
 const SeriesTable = ({ data, loading }: { data: TrendListResponse | null; loading: boolean }) => {
+  const [open, setOpen] = useState<number | null>(null);
   if (loading) {
     return <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>;
   }
@@ -97,6 +150,7 @@ const SeriesTable = ({ data, loading }: { data: TrendListResponse | null; loadin
       {data.analyzable === 0 && data.detail && (
         <Alert severity="info" sx={{ mb: 2 }}>{data.detail}</Alert>
       )}
+      <Movements series={data.series} />
       <TableContainer component={Paper}>
         <Table size="small">
           <TableHead>
@@ -107,6 +161,7 @@ const SeriesTable = ({ data, loading }: { data: TrendListResponse | null; loadin
               <TableCell align="right">First</TableCell>
               <TableCell align="right">Latest</TableCell>
               <TableCell align="right">Change</TableCell>
+              <TableCell>History</TableCell>
               <TableCell align="right">Measurements</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Last observed</TableCell>
@@ -114,8 +169,16 @@ const SeriesTable = ({ data, loading }: { data: TrendListResponse | null; loadin
           </TableHead>
           <TableBody>
             {data.series.map((s, i) => (
-              <TableRow key={`${s.subject}-${s.subject_id}-${i}`} hover>
-                <TableCell><DirectionIcon series={s} /></TableCell>
+              <Fragment key={`${s.subject}-${s.subject_id}-${i}`}>
+              <TableRow hover onClick={() => setOpen(open === i ? null : i)}
+                        sx={{ cursor: 'pointer', '& > td': open === i ? { borderBottom: 'none' } : undefined }}>
+                <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                  <IconButton size="small" aria-label={open === i ? 'Hide chart' : 'Show chart'}
+                              onClick={(e) => { e.stopPropagation(); setOpen(open === i ? null : i); }}>
+                    {open === i ? <KeyboardArrowUpIcon fontSize="small" /> : <KeyboardArrowDownIcon fontSize="small" />}
+                  </IconButton>
+                  <DirectionIcon series={s} />
+                </TableCell>
                 <TableCell>
                   <Typography variant="subtitle2">{s.subject}</Typography>
                 </TableCell>
@@ -149,6 +212,7 @@ const SeriesTable = ({ data, loading }: { data: TrendListResponse | null; loadin
                     </Typography>
                   )}
                 </TableCell>
+                <TableCell><Sparkline series={s} /></TableCell>
                 <TableCell align="right">
                   <Tooltip title={`${s.distinct_points} distinct measurement${
                     s.distinct_points === 1 ? '' : 's'} from ${s.raw_observations} stored observation${
@@ -174,6 +238,14 @@ const SeriesTable = ({ data, loading }: { data: TrendListResponse | null; loadin
                   </Typography>
                 </TableCell>
               </TableRow>
+              <TableRow>
+                <TableCell colSpan={10} sx={{ py: 0, ...(open === i ? {} : { borderBottom: 'none' }) }}>
+                  <Collapse in={open === i} timeout="auto" unmountOnExit>
+                    <Box sx={{ py: 2, px: 1 }}><TrendChart series={s} /></Box>
+                  </Collapse>
+                </TableCell>
+              </TableRow>
+              </Fragment>
             ))}
           </TableBody>
         </Table>
