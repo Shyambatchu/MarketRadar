@@ -845,6 +845,7 @@ All submission-blocking issues and the recommended P2/P3 bugs were fixed. Regres
 | — | Dashboard lists all 7 modules with accurate copy and keyboard access. Added a 404 route, an axios timeout, and stopped the health indicator flickering. | `Dashboard.tsx`, `App.tsx`, `services/api.ts`, `AppLayout.tsx` |
 | — | Moved stray `backend/test_usage.py`, `test_usage.db` and `search_strings.py` to `_quarantine/backend/stray-root/`. | |
 | — | Added a `frontend` entry to `.claude/launch.json`. | |
+| — | (2026-10-10) Removed the placeholder `/api/market/search` route and the empty/stub modules (`maps_service.py`, `search_service.py`, `shopping_service.py`, `ai_service.py`, `schemas/market.py`, and the `pass` methods of `SerpApiService`). Removed the superseded `docs/api.md`, `architecture.md`, `database.md`, `serpapi.md`. Settings use Pydantic v2 `model_config`. Pages are lazy-loaded, so the production bundle is split per page. Files moved to `_quarantine/pre-submission-cleanup/`. | `main.py`, `config.py`, `serpapi_service.py`, `App.tsx`, docs |
 
 **Not changed (documented limitations, not bugs):**
 - No AI vendor adapter.
@@ -854,5 +855,5 @@ All submission-blocking issues and the recommended P2/P3 bugs were fixed. Regres
 - Chains collapse to one merchant per domain.
 - Price Intelligence is not persisted.
 - No auth.
-- No VCS.
-- Dead stub modules are left in place.
+
+(The project is now under git version control, and the dead stub modules were removed on 2026-10-10.)

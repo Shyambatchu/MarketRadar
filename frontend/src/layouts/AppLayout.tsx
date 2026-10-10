@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, Suspense } from 'react';
 import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { 
   Box, Drawer, AppBar, Toolbar, List, Typography, IconButton, 
   ListItem, ListItemButton, ListItemIcon, ListItemText, useTheme, useMediaQuery,
-  ListSubheader
+  ListSubheader, LinearProgress
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
@@ -202,7 +202,10 @@ const AppLayout = () => {
       </Box>
       
       <Box component="main" sx={{ flexGrow: 1, p: { xs: 2, md: 4 }, mt: '64px', width: { xs: '100%', md: `calc(100% - ${drawerWidth}px)` } }}>
-        <Outlet />
+        {/* Pages are lazy-loaded (see App.tsx); the sidebar stays put while one loads. */}
+        <Suspense fallback={<LinearProgress aria-label="Loading page" />}>
+          <Outlet />
+        </Suspense>
       </Box>
     </Box>
   );

@@ -271,8 +271,7 @@ MarketRadar/
 │       ├── services/          API client per module
 │       ├── types/             TypeScript response types
 │       ├── components/  layouts/  theme/
-├── docs/                      project document, demo guide, audit
-└── _quarantine/               superseded files kept for reference (not part of the app)
+└── docs/                      project document, demo guide, audit
 ```
 
 ## 9. Troubleshooting

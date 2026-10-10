@@ -379,9 +379,7 @@ C:\MarketRadar
 ├── docs/
 │   ├── MarketRadar-Technical-Documentation.md   ← this document
 │   ├── MarketRadar-Project-Overview.pdf
-│   ├── api.md · architecture.md · database.md
-│   ├── development.md              Dev setup + stale-server protocol
-│   └── serpapi.md
+│   └── development.md              Dev setup + stale-server protocol
 └── frontend/
     ├── index.html                  Title, favicon, meta
     ├── package.json
@@ -788,14 +786,6 @@ Teardown calls `engine.dispose()` before unlinking — Windows will not delete a
 ### `GET /api/health` 🆓 👁️
 
 Liveness check. Returns `{"status": "ok", "service": "market-radar-api"}`. Always 200.
-
----
-
-## Market
-
-### `GET /api/market/search` 🆓 👁️
-
-**Not currently implemented.** Returns `{"message": "Endpoint prepared for implementation"}` with 200. A scaffold.
 
 ---
 
@@ -2118,7 +2108,6 @@ curl -s http://127.0.0.1:8001/openapi.json
 | Group | Endpoints | Credits |
 | --- | --- | --- |
 | Health | `GET /api/health` | 🆓 |
-| Market | `GET /api/market/search` *(stub)* | 🆓 |
 | SerpApi | `search` · `search/batch` · `usage` · `recent` | 💳 / 💳 / 🆓 / 🆓 |
 | Competitors | `search` · `(list)` · `{id}` | 💳 / 🆓 / 🆓 |
 | Products | `search` · `(list)` · `{id}` | 💳 / 🆓 / 🆓 |

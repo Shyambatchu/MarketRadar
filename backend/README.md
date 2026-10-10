@@ -101,8 +101,7 @@ provider-supported equivalent, 429 rate limited, 502 provider failed,
 503 SerpApi key not configured.
 
 Legacy, not used by the frontend: `/api/prices/search`, `/api/prices/history`,
-`/api/prices/changes` (Google Shopping observations), and the stub
-`/api/market/search`.
+`/api/prices/changes` (Google Shopping observations).
 
 ## Design rules
 

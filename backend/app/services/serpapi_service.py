@@ -45,12 +45,3 @@ class SerpApiService:
                             + (budget.last_error or "the provider did not respond."))
 
         return results
-
-    def search_google(self):
-        pass
-
-    def search_google_maps(self):
-        pass
-
-    def search_google_trends(self):
-        pass

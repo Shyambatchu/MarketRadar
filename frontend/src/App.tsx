@@ -1,17 +1,20 @@
+import { lazy } from 'react';
 import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import { ThemeProvider } from '@mui/material/styles';
 import CssBaseline from '@mui/material/CssBaseline';
 import theme from './theme/theme';
 import AppLayout from './layouts/AppLayout';
-import Dashboard from './pages/Dashboard/Dashboard';
-import MarketResearch from './pages/MarketResearch/MarketResearch';
-import PriceIntelligence from './pages/PriceIntelligence/PriceIntelligence';
-import Competitors from './pages/Competitors/Competitors';
-import Products from './pages/Products/Products';
-import Trends from './pages/Trends/Trends';
-import MarketPulse from './pages/MarketPulse/MarketPulse';
-import AIAnalyst from './pages/AIAnalyst/AIAnalyst';
 import EmptyState from './components/EmptyState/EmptyState';
+
+// Each page is its own chunk, so the first load only fetches the page in view.
+const Dashboard = lazy(() => import('./pages/Dashboard/Dashboard'));
+const MarketResearch = lazy(() => import('./pages/MarketResearch/MarketResearch'));
+const PriceIntelligence = lazy(() => import('./pages/PriceIntelligence/PriceIntelligence'));
+const Competitors = lazy(() => import('./pages/Competitors/Competitors'));
+const Products = lazy(() => import('./pages/Products/Products'));
+const Trends = lazy(() => import('./pages/Trends/Trends'));
+const MarketPulse = lazy(() => import('./pages/MarketPulse/MarketPulse'));
+const AIAnalyst = lazy(() => import('./pages/AIAnalyst/AIAnalyst'));
 
 const NotFound = () => (
   <EmptyState

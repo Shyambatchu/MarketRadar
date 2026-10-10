@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from app.routes import health, market, products, prices, competitors, trends, pulse, analyst, serpapi
+from app.routes import health, products, prices, competitors, trends, pulse, analyst, serpapi
 from app.database.connection import engine
 from app.database.base import Base
 from app.database.schema_sync import sync_additive_columns
@@ -26,7 +26,6 @@ app.add_middleware(
 )
 
 app.include_router(health.router, prefix="/api", tags=["Health"])
-app.include_router(market.router, prefix="/api/market", tags=["Market"])
 app.include_router(products.router, prefix="/api/products", tags=["Products"])
 app.include_router(prices.router, prefix="/api/prices", tags=["Prices"])
 app.include_router(competitors.router, prefix="/api/competitors", tags=["Competitors"])
