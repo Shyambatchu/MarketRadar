@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone
@@ -19,6 +21,7 @@ MAX_RADIUS_MILES = 100
 
 
 router = APIRouter()
+logger = logging.getLogger("routes.prices")
 
 def get_serpapi_service(db: Session = Depends(get_db)):
     return SerpApiService(api_key=settings.SERPAPI_API_KEY, db=db)
@@ -45,7 +48,11 @@ def prices_search(
         raw_results = serpapi_service.search_google_shopping(query=q, location=location)
     except SerpApiNotConfiguredError as e:
         raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
+    except SerpApiProviderError as e:
+        # The provider failed: 502, never a generic server error.
+        raise HTTPException(status_code=502, detail=str(e))
+    except Exception:
+        logger.exception("shopping price search failed")
         raise HTTPException(status_code=500, detail="Unable to retrieve market data. Try again in a moment.")
 
     observations = normalization_service.normalize_market_observation(

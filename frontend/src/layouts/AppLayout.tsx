@@ -19,6 +19,7 @@ import Logo from '../components/Logo/Logo';
 
 import StatusIndicator from '../components/StatusIndicator/StatusIndicator';
 import CreditMeter from '../components/CreditMeter/CreditMeter';
+import ErrorBoundary from '../components/ErrorBoundary/ErrorBoundary';
 import api from '../services/api';
 import { isAxiosError } from 'axios';
 
@@ -205,9 +206,11 @@ const AppLayout = () => {
       
       <Box component="main" sx={{ flexGrow: 1, p: { xs: 2, md: 4 }, mt: '64px', width: { xs: '100%', md: `calc(100% - ${drawerWidth}px)` } }}>
         {/* Pages are lazy-loaded (see App.tsx); the sidebar stays put while one loads. */}
-        <Suspense fallback={<LinearProgress aria-label="Loading page" />}>
-          <Outlet />
-        </Suspense>
+        <ErrorBoundary resetKey={location.pathname}>
+          <Suspense fallback={<LinearProgress aria-label="Loading page" />}>
+            <Outlet />
+          </Suspense>
+        </ErrorBoundary>
       </Box>
     </Box>
   );

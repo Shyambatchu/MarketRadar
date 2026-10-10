@@ -5,6 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database.connection import get_db
+from app.routes.validation import (
+    MAX_LIST_LIMIT, MAX_MERCHANTS_PER_SEARCH, require_range,
+)
 from app.schemas.product import (
     ProductObservationListResponse, ProductObservationRecord,
     ProductSearchResponse,
@@ -49,6 +52,7 @@ def products_search(
     ever reported as "product not found" -- that is a 200 whose evidence says
     so explicitly.
     """
+    require_range("max_merchants", max_merchants, 1, MAX_MERCHANTS_PER_SEARCH)
     try:
         return service.discover(product=q, market=market, location=location,
                                 hl=hl, gl=gl, max_merchants=max_merchants)
@@ -77,6 +81,7 @@ def list_product_observations(
     db: Session = Depends(get_db),
 ):
     """Saved product observations. Reads the database only -- no provider request."""
+    require_range("limit", limit, 1, MAX_LIST_LIMIT)
     service = ProductService(db=db, competitor_service=None)
     total, observations = service.list_saved(
         product_query=q, market=market, merchant_id=merchant_id,

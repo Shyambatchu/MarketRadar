@@ -5,6 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.database.connection import get_db
+from app.routes.validation import (
+    MAX_LIST_LIMIT, MAX_RESULTS_PER_SEARCH, require_range,
+)
 from app.schemas.competitor import (
     Competitor, CompetitorListResponse, CompetitorSearchResponse,
 )
@@ -42,6 +45,7 @@ def competitors_search(
     ever reported as "no competitors found", which is what a 200 with an empty
     list means.
     """
+    require_range("num", num, 1, MAX_RESULTS_PER_SEARCH)
     try:
         return service.discover(market=market, query=q, location=location,
                                 hl=hl, gl=gl, num=num)
@@ -69,6 +73,7 @@ def list_competitors(
     db: Session = Depends(get_db),
 ):
     """Saved competitors. Reads the database only -- no provider request."""
+    require_range("limit", limit, 1, MAX_LIST_LIMIT)
     service = CompetitorService(db=db, organic_service=None)
     total, competitors = service.list_saved(
         market=market, location_resolved=location, status=status, limit=limit)

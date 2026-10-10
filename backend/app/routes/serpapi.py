@@ -3,6 +3,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from app.database.connection import get_db
+from app.routes.validation import MAX_RESULTS_PER_SEARCH, require_range
 from app.config import settings
 from app.services.serpapi_organic_service import (
     SerpApiOrganicService, SerpApiLimitExceededError, SerpApiProviderError,
@@ -31,7 +32,8 @@ def search_organic(
 ):
     if not q.strip():
         raise HTTPException(status_code=400, detail="Query 'q' is required.")
-        
+    require_range("num", num, 1, MAX_RESULTS_PER_SEARCH)
+
     try:
         # Market settings are request parameters, not fixed to one country.
         results = service.search_google(query=q, location=location, num=num,

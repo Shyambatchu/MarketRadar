@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, Optional
 
+import requests
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from serpapi import GoogleSearch
@@ -18,6 +19,62 @@ logger.setLevel(logging.INFO)
 
 # How long a provider response is reused before a live request is made again.
 CACHE_TTL_DAYS = 7
+
+# Seconds before one provider request is abandoned. The client library's own
+# default is 60000 seconds, which let a stalled request hold a worker for
+# most of a day.
+REQUEST_TIMEOUT_SECONDS = 30
+# Extra attempts after a transient failure, and the base of the backoff.
+MAX_RETRIES = 2
+RETRY_BACKOFF_SECONDS = 1.0
+
+# Error kinds. Only "transient" is retried: the others are stable answers
+# that repeating the request cannot change.
+ERROR_TRANSIENT = "transient"
+ERROR_AUTH = "invalid_api_key"
+ERROR_QUOTA = "quota_exhausted"
+ERROR_REQUEST = "invalid_request"
+# A failure we cannot classify. Not retried: an unknown fault repeated is
+# more likely to spend time than to succeed.
+ERROR_PROVIDER = "provider_error"
+
+_TRANSIENT_MARKERS = ("try again later", "timed out", "timeout",
+                      "temporarily", "502", "503", "504")
+
+# SerpApi reports a search that ran and matched nothing through the same
+# top-level "error" key as a real failure, while search_metadata.status still
+# reads "Success". That is an empty result, never a provider failure.
+_EMPTY_RESULT_MARKERS = (
+    "hasn't returned any results",
+    "has not returned any results",
+    "no results found",
+)
+
+
+def is_empty_result(results: dict) -> bool:
+    """True when the provider answered successfully with nothing to report."""
+    error = str(results.get("error") or "").lower()
+    status = str((results.get("search_metadata") or {}).get("status") or "")
+    if status.lower() == "error":
+        return False
+    return any(marker in error for marker in _EMPTY_RESULT_MARKERS)
+
+
+def classify_error(message: str, exc: Optional[BaseException] = None) -> str:
+    """Map a provider failure onto one of the ERROR_* kinds."""
+    if isinstance(exc, (requests.Timeout, requests.ConnectionError)):
+        return ERROR_TRANSIENT
+    text = (message or "").lower()
+    if "api key" in text and "invalid" in text:
+        return ERROR_AUTH
+    if "run out of searches" in text or ("limit" in text and (
+            "plan" in text or "hourly" in text or "throughput" in text)):
+        return ERROR_QUOTA
+    if "unsupported" in text or ("missing" in text and "parameter" in text):
+        return ERROR_REQUEST
+    if any(marker in text for marker in _TRANSIENT_MARKERS):
+        return ERROR_TRANSIENT
+    return ERROR_PROVIDER
 
 
 class ApiBudgetManager:
@@ -34,8 +91,13 @@ class ApiBudgetManager:
         # Why the most recent live request failed, for callers that need to
         # report the provider's own message rather than a generic failure.
         self.last_error: Optional[str] = None
+        # One of the ERROR_* constants, so callers can tell a bad key or an
+        # exhausted plan from an outage without parsing provider prose.
+        self.last_error_kind: Optional[str] = None
 
         self._exec_cache: Dict[str, Any] = {}
+        # Injectable so tests exercise the retry path without waiting.
+        self._sleep = time.sleep
 
     def _record_usage(self, endpoint: str, query: str) -> int:
         """Atomically records 1 API credit used."""
@@ -63,6 +125,40 @@ class ApiBudgetManager:
             "usage_id": usage_id
         })
         self.db.commit()
+
+    def _fetch_with_retries(self, params: dict, endpoint: str):
+        """(results, error, kind). ``results`` is None when the request failed.
+
+        Transient failures (timeouts, connection errors, the provider's own
+        "try again later") are retried with exponential backoff. A bad key, an
+        exhausted plan, an invalid request or an unclassified fault is
+        returned at once, because repeating it cannot succeed and would only
+        add latency.
+        """
+        error, kind = None, None
+        for attempt in range(MAX_RETRIES + 1):
+            if attempt:
+                self._sleep(RETRY_BACKOFF_SECONDS * (2 ** (attempt - 1)))
+            try:
+                search = GoogleSearch(params)
+                search.timeout = REQUEST_TIMEOUT_SECONDS
+                results = search.get_dict()
+            except Exception as exc:
+                error = str(exc) or type(exc).__name__
+                kind = classify_error(error, exc)
+            else:
+                if not isinstance(results, dict):
+                    error, kind = "The provider returned an unreadable response.", ERROR_TRANSIENT
+                elif "error" not in results or is_empty_result(results):
+                    return results, None, None
+                else:
+                    error = str(results["error"])
+                    kind = classify_error(error)
+            if kind != ERROR_TRANSIENT:
+                break
+            logger.info("[API USAGE] RETRYABLE provider=%s attempt=%d detail=%s",
+                        endpoint, attempt + 1, error)
+        return None, error, kind
 
     def _log_budget(self, action: str, provider: str, merchant: str = ""):
         if action == "CACHE HIT":
@@ -113,20 +209,19 @@ class ApiBudgetManager:
         
         start_time = time.time()
         params["api_key"] = self.api_key
-        try:
-            search = GoogleSearch(params)
-            results = search.get_dict()
-            if "error" in results:
-                raise Exception(results["error"])
-        except Exception as e:
+        results, error, kind = self._fetch_with_retries(params, endpoint)
+        if results is None:
             # A failed request consumes no search credit at the provider, so
             # the reservation is settled at 0 rather than 1.
             self._update_reservation(usage_id, False, time.time() - start_time, 0)
-            self.last_error = str(e)
-            logger.info("[API USAGE] ERROR provider=%s detail=%s", endpoint, e)
+            self.last_error = error
+            self.last_error_kind = kind
+            logger.info("[API USAGE] ERROR provider=%s kind=%s detail=%s",
+                        endpoint, kind, error)
             return None
 
         self.last_error = None
+        self.last_error_kind = None
 
         response_time = time.time() - start_time
         self._update_reservation(usage_id, True, response_time, 1)

@@ -1,7 +1,7 @@
-import os
 from sqlalchemy.orm import Session
 from app.services.api_budget import ApiBudgetManager
 from app.services.location_service import default_resolver
+from app.services.serpapi_organic_service import SerpApiProviderError
 
 class SerpApiNotConfiguredError(Exception):
     pass
@@ -41,7 +41,7 @@ class SerpApiService:
         results = budget.execute_search(cache_key, params, "google_shopping")
         if results is None:
             # The provider failed; that is never reported as zero results.
-            raise Exception("Failed to fetch market data: "
+            raise SerpApiProviderError("Failed to fetch market data: "
                             + (budget.last_error or "the provider did not respond."))
 
         return results
