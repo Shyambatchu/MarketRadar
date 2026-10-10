@@ -256,8 +256,10 @@ class TrendsService:
 
         return self._series_from(
             rows=query.all(),
+            # Currency is part of the key: figures in two currencies are two
+            # series, never one movement.
             key=lambda r: (r.normalized_query, r.merchant_id, r.market,
-                           r.location_resolved),
+                           r.location_resolved, r.currency),
             metric="price",
             value=lambda r: r.price,
             label=lambda r: r.observed_size,
@@ -324,6 +326,7 @@ class TrendsService:
                      value: Callable, label: Callable, subject: Callable,
                      subject_id: Callable, context: Callable,
                      empty_detail: str) -> TrendListResponse:
+        with_currency = metric == "price"
         grouped: Dict[Tuple, List] = {}
         for row in rows:
             grouped.setdefault(key(row), []).append(row)
@@ -332,11 +335,14 @@ class TrendsService:
         for group in grouped.values():
             group.sort(key=lambda r: _aware(r.observed_at))
             newest = group[-1]
-            series.append(build_series(
+            built = build_series(
                 subject=subject(newest), metric=metric, context=context(newest),
                 subject_id=subject_id(newest),
                 observations=[(_aware(r.observed_at), value(r), label(r))
-                              for r in group]))
+                              for r in group])
+            if with_currency:
+                built.currency = newest.currency
+            series.append(built)
 
         # Something that moved is more interesting than something that could
         # not be assessed, so assessable series come first.

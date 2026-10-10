@@ -116,9 +116,11 @@ class ProductService:
         # A product may only be attributed to a merchant we actually
         # identified. An uncertain identity -- a chain we cannot pin to one
         # store, or a fuzzy name match -- may not carry product evidence.
+        # A business the user rejected as a competitor is not searched.
         candidates = [c for c in merchant_search.competitors
                       if c.status != "uncertain"
-                      and c.match_confidence != "low"]
+                      and c.match_confidence != "low"
+                      and c.review_status != "rejected"]
         without_domain = [c for c in candidates if not c.domain]
         searchable = [c for c in candidates if c.domain][:max_merchants]
 
@@ -286,6 +288,10 @@ class ProductService:
             unavailable("size_unverified")
         elif row["price"] is None:
             unavailable("price_unavailable")
+        elif not row.get("currency"):
+            # A figure with no established currency is not comparable with
+            # any other, so it cannot be a verified price.
+            unavailable("currency_unknown")
 
         return ProductEvidence(
             merchant=merchant.name, merchant_id=merchant.id,
@@ -300,7 +306,7 @@ class ProductService:
             price_status=price_status,
             verification_reason=reason,
             price=row["price"] if price_status == VERIFIED else None,
-            currency="USD" if price_status == VERIFIED else None,
+            currency=row.get("currency") if price_status == VERIFIED else None,
             source_type=row["source_type"], source_url=row["url"],
             source_domain=row["source_domain"],
             discovery_method="indexed_search", page_type=row["page_type"],

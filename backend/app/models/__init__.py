@@ -11,11 +11,16 @@ error, so it stayed invisible.
 Importing every model here makes registration explicit and keeps the next
 module from tripping over the same thing.
 """
+from app.models.audit_event import AuditEvent
 from app.models.business import Business
 from app.models.competitor import CompetitorObservation
 from app.models.market_event import MarketEvent
 from app.models.market_observation import MarketObservation
 from app.models.merchant import Merchant
+from app.models.news_article import NewsArticle
+from app.models.opportunity import Opportunity
+from app.models.report import Report
+from app.models.saved_search import SavedSearch
 from app.models.product import Product
 from app.models.product_observation import ProductObservation
 from app.models.serpapi_models import (
@@ -24,8 +29,8 @@ from app.models.serpapi_models import (
 from app.models.trend_observation import TrendObservation
 
 __all__ = [
-    "ApiUsage", "Business", "CompetitorObservation", "MarketEvent",
-    "MarketObservation", "Merchant", "Product", "ProductObservation",
+    "ApiUsage", "AuditEvent", "Business", "CompetitorObservation", "MarketEvent",
+    "MarketObservation", "Merchant", "NewsArticle", "Opportunity", "Report", "SavedSearch", "Product", "ProductObservation",
     "SearchCache",
     "SerpLocalResult", "SerpSearch", "SerpSearchResult", "TrendObservation",
 ]

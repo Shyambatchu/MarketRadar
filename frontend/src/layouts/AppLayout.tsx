@@ -3,7 +3,7 @@ import { Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { 
   Box, Drawer, AppBar, Toolbar, List, Typography, IconButton, 
   ListItem, ListItemButton, ListItemIcon, ListItemText, useTheme, useMediaQuery,
-  ListSubheader, LinearProgress
+  ListSubheader
 } from '@mui/material';
 import MenuIcon from '@mui/icons-material/Menu';
 import DashboardOutlinedIcon from '@mui/icons-material/DashboardOutlined';
@@ -14,11 +14,16 @@ import ShowChartOutlinedIcon from '@mui/icons-material/ShowChartOutlined';
 import AttachMoneyOutlinedIcon from '@mui/icons-material/AttachMoneyOutlined';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import AutoAwesomeOutlinedIcon from '@mui/icons-material/AutoAwesomeOutlined';
+import LightbulbOutlinedIcon from '@mui/icons-material/LightbulbOutlined';
+import DescriptionOutlinedIcon from '@mui/icons-material/DescriptionOutlined';
+import SensorsOutlinedIcon from '@mui/icons-material/SensorsOutlined';
 
 import Logo from '../components/Logo/Logo';
 
 import StatusIndicator from '../components/StatusIndicator/StatusIndicator';
-import CreditMeter from '../components/CreditMeter/CreditMeter';
+import GlobalLoader from '../components/GlobalLoader/GlobalLoader';
+import { beginNavigation } from '../services/loadingTracker';
+import PageSkeleton from '../components/PageSkeleton/PageSkeleton';
 import ErrorBoundary from '../components/ErrorBoundary/ErrorBoundary';
 import api from '../services/api';
 import { isAxiosError } from 'axios';
@@ -30,12 +35,14 @@ const navGroups = [
     title: 'OVERVIEW',
     items: [
       { text: 'Dashboard', path: '/', icon: <DashboardOutlinedIcon /> },
+      { text: 'Opportunities', path: '/opportunities', icon: <LightbulbOutlinedIcon /> },
     ]
   },
   {
     title: 'RESEARCH',
     items: [
       { text: 'Market Research', path: '/research', icon: <SearchOutlinedIcon /> },
+      { text: 'Market Signals', path: '/signals', icon: <SensorsOutlinedIcon /> },
       { text: 'Competitors', path: '/competitors', icon: <StorefrontOutlinedIcon /> },
       { text: 'Trends', path: '/trends', icon: <TrendingUpOutlinedIcon /> },
       { text: 'Market Pulse', path: '/pulse', icon: <ShowChartOutlinedIcon /> },
@@ -47,6 +54,12 @@ const navGroups = [
       { text: 'Price Intelligence', path: '/prices', icon: <AttachMoneyOutlinedIcon /> },
       { text: 'Products', path: '/products', icon: <Inventory2OutlinedIcon /> },
       { text: 'AI Analyst', path: '/analyst', icon: <AutoAwesomeOutlinedIcon /> },
+    ]
+  },
+  {
+    title: 'WORKSPACE',
+    items: [
+      { text: 'Reports', path: '/reports', icon: <DescriptionOutlinedIcon /> },
     ]
   }
 ];
@@ -122,6 +135,9 @@ const AppLayout = () => {
                   <ListItemButton 
                     selected={active}
                     onClick={() => {
+                      // Start the global loader now: the router keeps the old
+                      // page on screen until the new one is ready.
+                      if (item.path !== location.pathname) beginNavigation();
                       navigate(item.path);
                       if (!isDesktop) setMobileOpen(false);
                     }}
@@ -152,7 +168,6 @@ const AppLayout = () => {
       </Box>
 
       <Box sx={{ p: 2, borderTop: '1px solid', borderColor: 'divider', bgcolor: 'background.paper' }}>
-        {backendStatus === 'connected' && <CreditMeter refreshKey={location.pathname} />}
         <StatusIndicator status={backendStatus} />
       </Box>
     </Box>
@@ -183,6 +198,7 @@ const AppLayout = () => {
             </Typography>
           </Box>
         </Toolbar>
+        <GlobalLoader />
       </AppBar>
       
       <Box component="nav" sx={{ width: { md: drawerWidth }, flexShrink: { md: 0 } }}>
@@ -207,7 +223,7 @@ const AppLayout = () => {
       <Box component="main" sx={{ flexGrow: 1, p: { xs: 2, md: 4 }, mt: '64px', width: { xs: '100%', md: `calc(100% - ${drawerWidth}px)` } }}>
         {/* Pages are lazy-loaded (see App.tsx); the sidebar stays put while one loads. */}
         <ErrorBoundary resetKey={location.pathname}>
-          <Suspense fallback={<LinearProgress aria-label="Loading page" />}>
+          <Suspense fallback={<PageSkeleton />}>
             <Outlet />
           </Suspense>
         </ErrorBoundary>

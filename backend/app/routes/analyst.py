@@ -1,10 +1,11 @@
 from typing import Optional
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.database.connection import get_db
-from app.schemas.analyst import AnalystResponse
+from app.schemas.analyst import AnalystAnswer, AnalystResponse, AskRequest
+from app.services.analyst_qa_service import AnalystQAService
 from app.services.analyst_service import AnalystService
 
 router = APIRouter()
@@ -40,3 +41,20 @@ def analyst_analysis(
     """
     return service.analyse(market=market, location=location,
                            include_summary=include_summary)
+
+
+@router.post("/ask", response_model=AnalystAnswer)
+def analyst_ask(request: AskRequest, db: Session = Depends(get_db)):
+    """Answer a question from numbered, stored evidence only.
+
+    The evidence list (analyst observations, price alerts, collected news) is
+    returned with every answer so each citation can be inspected. A written
+    answer appears only when an AI provider is configured and the answer
+    passes validation; otherwise the most relevant evidence is listed.
+    No SerpApi credit is spent.
+    """
+    try:
+        return AnalystQAService(db=db).ask(request.question, market=request.market,
+                                           location=request.location)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))

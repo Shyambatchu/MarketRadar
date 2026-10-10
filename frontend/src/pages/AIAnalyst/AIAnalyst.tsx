@@ -12,6 +12,7 @@ import { isAxiosError } from 'axios';
 
 import PageHeader from '../../components/PageHeader/PageHeader';
 import EmptyState from '../../components/EmptyState/EmptyState';
+import AskAnalyst from './AskAnalyst';
 import { getMarketPulseOptions } from '../../services/marketPulseApi';
 import { getAnalysis } from '../../services/analystApi';
 import type { MarketOption } from '../../types/marketPulse';
@@ -76,13 +77,38 @@ const AIAnalyst = () => {
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<AnalystResponse | null>(null);
 
+  // The analysis reads stored data only, so it runs as soon as a market is chosen.
+  const run = async (option: MarketOption | null = selected) => {
+    if (!option) return;
+    setLoading(true);
+    setError(null);
+    // A failed rerun must not leave the previous analysis on screen.
+    setData(null);
+    try {
+      setData(await getAnalysis({
+        market: option.market ?? undefined,
+        location: option.location ?? undefined,
+      }));
+    } catch (err) {
+      const detail = isAxiosError(err) ? err.response?.data?.detail : null;
+      setError(detail || 'Unable to generate the analysis.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Markets come from observed history, shared with Market Pulse.
   useEffect(() => {
     const controller = new AbortController();
     getMarketPulseOptions(controller.signal)
       .then((res) => {
         setOptions(res.options);
-        if (res.options.length === 1) setSelected(res.options[0]);
+        const selectable = res.options.filter((o) => o.market && o.location)
+          .sort((a, b) => (b.last_observed_at ?? '').localeCompare(a.last_observed_at ?? ''));
+        if (selectable.length > 0) {
+          setSelected(selectable[0]);
+          run(selectable[0]);
+        }
       })
       .catch((err) => {
         if (!isAxiosError(err) || err.code !== 'ERR_CANCELED') {
@@ -94,30 +120,11 @@ const AIAnalyst = () => {
     return () => controller.abort();
   }, []);
 
-  const run = async () => {
-    if (!selected) return;
-    setLoading(true);
-    setError(null);
-    // A failed rerun must not leave the previous analysis on screen.
-    setData(null);
-    try {
-      setData(await getAnalysis({
-        market: selected?.market ?? undefined,
-        location: selected?.location ?? undefined,
-      }));
-    } catch (err) {
-      const detail = isAxiosError(err) ? err.response?.data?.detail : null;
-      setError(detail || 'Unable to generate the analysis.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <Box>
       <PageHeader
         title="AI Analyst"
-        subtitle="Evidence-grounded analysis of a Market Pulse snapshot. Every statement traces back to recorded observations."
+        subtitle="Ask questions or run the full analysis of a market. Every statement traces back to recorded observations."
       />
 
       <Paper sx={{ p: 3, mb: 4 }}>
@@ -125,7 +132,7 @@ const AIAnalyst = () => {
           <Grid size={{ xs: 12, sm: 9 }}>
             <Autocomplete
               size="small" options={options} value={selected}
-              onChange={(_, v) => { setSelected(v); setData(null); setError(null); }}
+              onChange={(_, v) => { setSelected(v); setData(null); setError(null); if (v) run(v); }}
               // Omitting a missing filter would analyse every market at once.
               getOptionDisabled={(o) => !o.market || !o.location}
               getOptionLabel={optionLabel}
@@ -147,13 +154,15 @@ const AIAnalyst = () => {
               startIcon={loading
                 ? <CircularProgress size={20} color="inherit" />
                 : <AutoAwesomeOutlinedIcon />}
-              onClick={run} disabled={loading || loadingOptions || !selected}
+              onClick={() => run()} disabled={loading || loadingOptions || !selected}
             >
-              Analyze
+              Refresh analysis
             </Button>
           </Grid>
         </Grid>
       </Paper>
+
+      <AskAnalyst market={selected?.market} location={selected?.location} disabled={!selected} />
 
       {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
 

@@ -58,6 +58,8 @@ class CompetitorEntry(BaseModel):
     distinct_searches: int = 0
 
     present_in_latest: bool = True
+    # The user's review (confirmed | rejected), independent of ``status``.
+    review_status: Optional[str] = None
     # Stated in full so absence is never read as closure.
     presence_note: Optional[str] = None
     has_location_evidence: bool = False

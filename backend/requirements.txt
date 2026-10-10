@@ -1,5 +1,7 @@
 # Runtime dependencies
-fastapi==0.104.1
+# 0.115 (Starlette 0.46) supports anyio 4, which the anthropic SDK requires;
+# 0.104 pinned anyio<4. Verified against the full test suite on upgrade.
+fastapi==0.115.12
 uvicorn==0.24.0
 sqlalchemy==2.0.23
 pydantic==2.5.2
@@ -14,3 +16,7 @@ google-search-results==2.4.2
 # google-search-results; declared explicitly so an upstream change cannot
 # break the application.
 requests==2.34.2
+
+# AI Analyst narrative and Q&A (optional; imported only when
+# AI_PROVIDER=anthropic is configured).
+anthropic==1.13.0

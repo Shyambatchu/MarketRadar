@@ -15,6 +15,10 @@ const Products = lazy(() => import('./pages/Products/Products'));
 const Trends = lazy(() => import('./pages/Trends/Trends'));
 const MarketPulse = lazy(() => import('./pages/MarketPulse/MarketPulse'));
 const AIAnalyst = lazy(() => import('./pages/AIAnalyst/AIAnalyst'));
+const Opportunities = lazy(() => import('./pages/Opportunities/Opportunities'));
+const Reports = lazy(() => import('./pages/Reports/Reports'));
+const MarketSignals = lazy(() => import('./pages/MarketSignals/MarketSignals'));
+const Usage = lazy(() => import('./pages/Usage/Usage'));
 
 const NotFound = () => (
   <EmptyState
@@ -38,6 +42,10 @@ function App() {
             <Route path="trends" element={<Trends />} />
             <Route path="pulse" element={<MarketPulse />} />
             <Route path="analyst" element={<AIAnalyst />} />
+            <Route path="opportunities" element={<Opportunities />} />
+            <Route path="reports" element={<Reports />} />
+            <Route path="signals" element={<MarketSignals />} />
+            <Route path="usage" element={<Usage />} />
             <Route path="*" element={<NotFound />} />
           </Route>
         </Routes>

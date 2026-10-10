@@ -15,6 +15,7 @@ from urllib.parse import urlparse, parse_qs
 
 from app.services.api_budget import ApiBudgetManager
 from app.services.merchant_identity import host_matches_domain
+from app.services.money import PRICE_RE, find_prices
 
 # Query-string keys indicating a filtered listing/search page, not a product.
 LISTING_QUERY_KEYS = {
@@ -55,14 +56,27 @@ class MerchantWebsitePriceProvider:
     def __init__(self):
         pass
 
-    def extract_price_info(self, title: str, snippet: str, search_product: str) -> dict:
+    def extract_price_info(self, title: str, snippet: str, search_product: str,
+                           country: Optional[str] = None) -> dict:
+        """Price, currency and reliability flags for one indexed result.
+
+        ``country`` resolves a bare "$" (US, Canadian, Australian ...); any
+        other symbol or ISO code carries its own currency. Bare numbers are
+        never prices.
+        """
         text = f"{title} ... {snippet}"
+        none = {"price": None, "currency": None, "is_range": False,
+                "ambiguous_price": False, "segment": text}
 
-        if re.search(r'\$(\d+\.\d{2})\s*(?:-|–|to)\s*\$(\d+\.\d{2})', text):
-            return {"price": None, "is_range": True, "ambiguous_price": False, "segment": text}
+        # A range ("$29.99 - $49.99", "12 € to 20 €") names no single price.
+        prices_in_text = find_prices(text, country)
+        for a, b in zip(prices_in_text, prices_in_text[1:]):
+            between = text[text.find(a.raw) + len(a.raw):text.find(b.raw, text.find(a.raw) + len(a.raw))]
+            if re.fullmatch(r"\s*(?:-|–|to)\s*", between):
+                return dict(none, is_range=True)
 
-        if re.search(r'(?i)(?:starting at|starts at|from|as low as)\s*\$\d+\.\d{2}', text):
-            return {"price": None, "is_range": False, "ambiguous_price": True, "segment": text}
+        if re.search(r'(?i)(?:starting at|starts at|from|as low as)\s*' + PRICE_RE.pattern, text):
+            return dict(none, ambiguous_price=True)
 
         segments = re.split(r'(?:\.\.\.|\. | \| | - )', text)
 
@@ -71,7 +85,7 @@ class MerchantWebsitePriceProvider:
 
         def extract_sizes(t):
             sizes = set(re.findall(
-                r'\b\d+(?:\.\d+)?\s*(?:ml|l|oz|g|kg|lb|pack|pk|gb|tb|in|inch|cm|mm|mg)\b',
+                r'\d+(?:\.\d+)?\s*(?:ml|l|oz|g|kg|lb|pack|pk|gb|tb|in|inch|cm|mm|mg)',
                 t.lower()))
             return {s.replace(' ', '') for s in sizes}
 
@@ -81,13 +95,15 @@ class MerchantWebsitePriceProvider:
         best_segment, best_score, best_price = None, -999, None
 
         for seg in segments:
-            prices = re.findall(r'\$(\d+\.\d{2})', seg)
+            prices = find_prices(seg, country)
             if not prices:
                 continue
+            if len({p.currency for p in prices}) > 1:
+                continue
             if len(prices) == 1:
-                seg_price = float(prices[0])
+                seg_price = prices[0]
             elif re.search(r'(?i)was|now|sale|save|regular', seg):
-                seg_price = min(float(p) for p in prices)
+                seg_price = min(prices, key=lambda p: p.amount)
             else:
                 continue
 
@@ -98,17 +114,16 @@ class MerchantWebsitePriceProvider:
                 best_score, best_segment, best_price = score, seg, seg_price
 
         if best_price is not None and best_score >= 0:
-            return {"price": best_price, "is_range": False,
-                    "ambiguous_price": False, "segment": best_segment}
+            return {"price": best_price.amount, "currency": best_price.currency,
+                    "is_range": False, "ambiguous_price": False,
+                    "segment": best_segment}
 
-        all_prices = re.findall(r'\$(\d+\.\d{2})', text)
-        if len(all_prices) == 1:
-            return {"price": float(all_prices[0]), "is_range": False,
-                    "ambiguous_price": False, "segment": text}
-        if len(all_prices) > 1:
-            return {"price": None, "is_range": False, "ambiguous_price": True, "segment": text}
-
-        return {"price": None, "is_range": False, "ambiguous_price": False, "segment": text}
+        if len(prices_in_text) == 1:
+            only = prices_in_text[0]
+            return dict(none, price=only.amount, currency=only.currency)
+        if len(prices_in_text) > 1:
+            return dict(none, ambiguous_price=True)
+        return none
 
     def discover_prices(self, merchant: Dict, product: str,
                         budget_manager: ApiBudgetManager,
@@ -143,7 +158,7 @@ class MerchantWebsitePriceProvider:
 
             title = res.get("title", "")
             snippet = res.get("snippet", "")
-            info = self.extract_price_info(title, snippet, product)
+            info = self.extract_price_info(title, snippet, product, country=gl)
             page_type = classify_page_type(link)
 
             observations.append({
@@ -152,6 +167,7 @@ class MerchantWebsitePriceProvider:
                 "raw_snippet": snippet,
                 "url": link,
                 "price": info["price"],
+                "currency": info["currency"],
                 "availability": "In Stock" if re.search(
                     r'(?i)add to cart|in stock|available', snippet) else None,
                 "source_type": "merchant_website_indexed",

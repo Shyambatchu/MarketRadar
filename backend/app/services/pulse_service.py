@@ -202,7 +202,8 @@ class MarketPulseService:
             times = sorted(_aware(r.observed_at) for r in group if r.observed_at)
             present = bool(latest and times and times[-1] >= latest)
             entries.append(CompetitorEntry(
-                merchant_id=merchant_id, name=merchant.name,
+                merchant_id=merchant_id, name=merchant.display_name or merchant.name,
+                review_status=merchant.review_status,
                 domain=merchant.normalized_domain, website=merchant.website,
                 address=merchant.address,
                 status=merchant.status or "discovered",

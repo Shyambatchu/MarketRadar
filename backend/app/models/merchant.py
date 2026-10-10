@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Float, DateTime
+from sqlalchemy import Column, Integer, String, Float, DateTime, Text
 from sqlalchemy.sql import func
 from app.database.base import Base
 
@@ -49,3 +49,15 @@ class Merchant(Base):
     # Set on every rediscovery, so staleness is visible without reading the
     # observation history.
     last_seen_at = Column(DateTime(timezone=True), nullable=True)
+
+    # ---- human review ---------------------------------------------------
+    # Kept apart from ``status`` on purpose: ``status`` is how strong the
+    # identity evidence is, and discovery keeps updating it. Whether this
+    # business is a *competitor* is the user's judgement -- an organic result
+    # is never proof of that -- and no search may overwrite it.
+    # NULL (unreviewed) | confirmed | rejected
+    review_status = Column(String, nullable=True, index=True)
+    # A user-supplied name, shown in place of the discovered one.
+    display_name = Column(String, nullable=True)
+    review_note = Column(Text, nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)

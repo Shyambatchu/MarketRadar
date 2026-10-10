@@ -80,6 +80,12 @@ export interface Competitor {
   last_seen_at: string | null;
   evidence_count: number;
   evidence: CompetitorEvidence[];
+
+  /** The user's judgement, independent of `status`: null is unreviewed. */
+  review_status: 'confirmed' | 'rejected' | null;
+  display_name: string | null;
+  review_note: string | null;
+  reviewed_at: string | null;
 }
 
 /** A result that was not a business, kept so nothing disappears silently. */

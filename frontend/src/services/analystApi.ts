@@ -1,5 +1,5 @@
 import api from './api';
-import type { AnalystResponse } from '../types/analyst';
+import type { AnalystAnswer, AnalystResponse } from '../types/analyst';
 
 /**
  * The AI Analyst reads a Market Pulse snapshot. It makes no provider search,
@@ -19,5 +19,17 @@ export const getAnalysis = async (
   const suffix = params.toString() ? `?${params.toString()}` : '';
 
   const response = await api.get<AnalystResponse>(`/analyst/analysis${suffix}`, { signal });
+  return response.data;
+};
+
+/**
+ * Ask a question answered only from numbered, stored evidence. Every answer
+ * returns the full evidence list so each citation can be inspected. No
+ * SerpApi credit is spent.
+ */
+export const askAnalyst = async (
+  request: { question: string; market?: string | null; location?: string | null },
+): Promise<AnalystAnswer> => {
+  const response = await api.post<AnalystAnswer>('/analyst/ask', request);
   return response.data;
 };

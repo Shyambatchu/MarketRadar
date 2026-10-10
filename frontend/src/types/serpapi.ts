@@ -31,7 +31,31 @@ export interface SerpSearchResponse {
   /** 'success' | 'no_results'. A provider failure is a non-200 response. */
   provider_status: string;
   results: SerpSearchResult[];
-  local_results?: any | null;
+  local_results?: SerpLocalResult[] | null;
+  /** From the same Google response, at no extra cost. Research leads, not evidence. */
+  related_questions: RelatedQuestion[];
+  related_searches: string[];
+}
+
+export interface SerpLocalResult {
+  position: number | null;
+  title: string | null;
+  type: string | null;
+  rating: number | null;
+  reviews: number | null;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  place_id: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+export interface RelatedQuestion {
+  question: string;
+  snippet: string | null;
+  title: string | null;
+  link: string | null;
 }
 
 /**

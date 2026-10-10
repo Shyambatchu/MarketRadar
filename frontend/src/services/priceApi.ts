@@ -11,7 +11,8 @@ export interface LocalPriceObservation {
   variant: string | null;
   size: string | null;
   price: number | null;
-  currency: string;
+  /** Null when the evidence did not establish a currency. */
+  currency: string | null;
   availability: string | null;
   source_type: string;
   source_domain: string | null;
@@ -56,6 +57,7 @@ export interface NearbyMerchantStatus {
   verification_reason: string | null;
   price: number | null;
   price_source: string | null;
+  currency?: string | null;
   source_domain: string | null;
   source_url: string | null;
 
@@ -111,6 +113,11 @@ export interface LocalPriceSearchResponse {
   shopping_merchant_matches: number;
   merchant_uncertain_count: number;
   verified_local_prices: number;
+  /** Rows this run appended to stored history (feeds Trends and Pulse). */
+  persisted_observations: number;
+  /** Currency of the statistics; null when prices span several currencies. */
+  currency: string | null;
+  mixed_currency_statistics: boolean;
 
   verified_sizes: string[];
   mixed_size_statistics: boolean;

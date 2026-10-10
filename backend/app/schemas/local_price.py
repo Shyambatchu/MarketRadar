@@ -26,7 +26,7 @@ class LocalPriceObservation(BaseModel):
     variant: Optional[str] = None
     size: Optional[str] = None
     price: Optional[float] = None
-    currency: str = "USD"
+    currency: Optional[str] = None
     availability: Optional[str] = None
     source_type: str
     source_domain: Optional[str] = None
@@ -72,6 +72,7 @@ class NearbyMerchantStatus(BaseModel):
     verification_reason: Optional[str] = None
     price: Optional[float] = None
     price_source: Optional[str] = None
+    currency: Optional[str] = None
     source_domain: Optional[str] = None
     source_url: Optional[str] = None
 
@@ -111,6 +112,9 @@ class LocalPriceSearchResponse(BaseModel):
     # named no size, several sizes may qualify -- surfaced, never hidden.
     verified_sizes: List[str] = []
     mixed_size_statistics: bool = False
+    # Statistics are withheld when verified prices are in several currencies.
+    currency: Optional[str] = None
+    mixed_currency_statistics: bool = False
 
     nearby_merchants_discovered: int = 0
     product_evidence_found: int = 0
@@ -139,6 +143,8 @@ class LocalPriceSearchResponse(BaseModel):
     shopping_merchant_matches: int = 0
     merchant_uncertain_count: int = 0
     verified_local_prices: int = 0
+    # Rows appended to product_observations by this run.
+    persisted_observations: int = 0
 
     stages: List[StageStatus] = []
 

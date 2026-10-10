@@ -11,6 +11,8 @@ from app.services.intelligence_service import IntelligenceService
 from app.database.connection import get_db
 from app.config import settings
 from app.schemas.local_price import LocalPriceSearchResponse
+from app.schemas.price_change import PriceAlertResponse
+from app.services.price_change_service import PriceChangeService
 from app.services.live_price_service import (
     LivePriceService, LocationResolutionError, SerpApiProviderError,
 )
@@ -132,3 +134,29 @@ def local_prices_search(
     except SerpApiProviderError as e:
         # The provider failed; never reported as a location problem.
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/alerts", response_model=PriceAlertResponse)
+def price_alerts(
+    q: Optional[str] = None,
+    market: Optional[str] = None,
+    location: Optional[str] = None,
+    min_change_percent: Optional[float] = None,
+    outlier_mad_k: Optional[float] = None,
+    dispersion_min_percent: Optional[float] = None,
+    db: Session = Depends(get_db),
+):
+    """Detected price changes over stored verified observations.
+
+    Reads the database only -- no provider request, no credit. Thresholds
+    default to the configured values and can be overridden per request.
+    """
+    for name, value in (("min_change_percent", min_change_percent),
+                        ("outlier_mad_k", outlier_mad_k),
+                        ("dispersion_min_percent", dispersion_min_percent)):
+        if value is not None and value < 0:
+            raise HTTPException(status_code=400, detail="'" + name + "' must not be negative.")
+    return PriceChangeService(db).detect(
+        product_query=q, market=market, location=location,
+        min_change_percent=min_change_percent, outlier_mad_k=outlier_mad_k,
+        dispersion_min_percent=dispersion_min_percent)

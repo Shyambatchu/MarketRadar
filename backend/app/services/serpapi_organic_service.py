@@ -7,7 +7,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from app.models.serpapi_models import SerpSearch, SerpSearchResult, SerpLocalResult
-from app.services.api_budget import ApiBudgetManager
+from app.services.api_budget import ApiBudgetManager, UsageBudgetExceededError
 from app.services.location_service import (
     LocationResolutionError, default_resolver,
 )
@@ -16,8 +16,8 @@ from app.services.serpapi_account import fetch_account_usage
 class SerpApiNotConfiguredError(Exception):
     pass
 
-class SerpApiLimitExceededError(Exception):
-    pass
+# One error for "no more searches may be made": the routes already map it to 429.
+SerpApiLimitExceededError = UsageBudgetExceededError
 
 class SerpApiProviderError(Exception):
     """The provider request failed. Distinct from a search that found nothing."""
@@ -180,7 +180,20 @@ class SerpApiOrganicService:
 
         self.db.commit()
 
+        related_questions = []
+        for item in raw_results.get("related_questions") or []:
+            if isinstance(item, dict) and item.get("question"):
+                related_questions.append({
+                    "question": item["question"], "snippet": item.get("snippet"),
+                    "title": item.get("title"), "link": item.get("link")})
+        related_searches = []
+        for item in raw_results.get("related_searches") or []:
+            if isinstance(item, dict) and item.get("query")                     and item["query"] not in related_searches:
+                related_searches.append(item["query"])
+
         return {
+            "related_questions": related_questions,
+            "related_searches": related_searches,
             "query": query,
             # What the user asked for, and what the provider was actually given.
             "location": location,

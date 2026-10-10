@@ -63,3 +63,16 @@ def test_a_shopping_provider_failure_is_502_not_500(client):
         settings.SERPAPI_API_KEY = "test-key"
         r = client.get("/api/prices/search?q=widget")
     assert r.status_code == 502
+
+
+def test_an_unexpected_error_is_json_with_cors_headers():
+    """A 500 used to lack CORS headers, so the browser reported the backend
+    as unreachable instead of showing the error."""
+    with patch("app.routes.reports.create_report", side_effect=RuntimeError("boom")):
+        client = TestClient(app, raise_server_exceptions=False)
+        r = client.post("/api/reports", json={},
+                        headers={"Origin": "http://localhost:5173"})
+    assert r.status_code == 500
+    assert r.headers.get("access-control-allow-origin") == "http://localhost:5173"
+    assert "unexpected error" in r.json()["detail"]
+    assert "boom" not in r.text

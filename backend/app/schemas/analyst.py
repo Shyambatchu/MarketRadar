@@ -79,3 +79,53 @@ class AnalystResponse(BaseModel):
     evidence: List[EvidenceRef] = []
 
     detail: Optional[str] = None
+
+
+class AskRequest(BaseModel):
+    question: str
+    market: Optional[str] = None
+    location: Optional[str] = None
+
+
+class EvidenceItem(BaseModel):
+    """One numbered piece of evidence the answer may cite as [F#]."""
+    id: str
+    kind: str          # observation | limitation | price_alert | news
+    section: str
+    statement: str
+    source_urls: List[str] = []
+    observed_at: Optional[datetime] = None
+    record_ids: List[int] = []
+
+
+class CitedStatement(BaseModel):
+    statement: str
+    citations: List[str] = []
+
+
+class AnalystAnswer(BaseModel):
+    """An answer to a question, built only from numbered evidence.
+
+    ``facts`` restate evidence; ``interpretations`` read it; ``hypotheses`` are
+    things worth checking next, explicitly unproven. ``mode`` is "assisted"
+    when a model wrote the answer and it passed validation, "deterministic"
+    when the evidence most relevant to the question is returned without prose.
+    """
+    generated_at: datetime
+    question: str
+    context: MarketContext
+    mode: str = "deterministic"
+    provider_configured: bool = False
+    provider_name: Optional[str] = None
+    answer: Optional[str] = None
+    facts: List[CitedStatement] = []
+    interpretations: List[CitedStatement] = []
+    hypotheses: List[CitedStatement] = []
+    missing_data: List[str] = []
+    confidence: Optional[str] = None
+    relevant_evidence: List[str] = []
+    evidence: List[EvidenceItem] = []
+    answer_rejected: bool = False
+    rejection_reason: Optional[str] = None
+    provider_error: Optional[str] = None
+    detail: Optional[str] = None

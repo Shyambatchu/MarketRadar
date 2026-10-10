@@ -9,6 +9,8 @@ from app.services.serpapi_organic_service import (
     SerpApiOrganicService, SerpApiLimitExceededError, SerpApiProviderError,
 )
 from app.services.location_service import LocationResolutionError
+from app.services.serpapi_account import fetch_account_usage
+from app.services.usage_service import usage_breakdown
 from typing import List
 from app.schemas.serpapi_schemas import SerpSearchResponseSchema, BatchSearchRequest, BatchSearchResponse, UsageStatsResponse, RecentSearchSchema
 
@@ -74,17 +76,27 @@ def batch_search(
         except LocationResolutionError as e:
             raise HTTPException(status_code=422, detail=str(e))
 
+    errors = []
     for q in req.queries:
         try:
             res = service.search_google(query=q, location=req.location)
             results.append(res)
-        except Exception:
+        except SerpApiLimitExceededError as e:
+            # The budget is spent: the remaining queries would all fail too.
+            raise HTTPException(status_code=429, detail=str(e))
+        except SerpApiProviderError as e:
             failed += 1
+            errors.append({"query": q, "detail": str(e)})
+        except Exception:
+            logger.exception("batch search query failed")
+            failed += 1
+            errors.append({"query": q, "detail": "The search could not be completed."})
 
     return {
         "total_requested": len(req.queries),
         "successful": len(results),
         "failed": failed,
+        "errors": errors,
         "results": results
     }
 
@@ -105,3 +117,10 @@ def get_usage(db: Session = Depends(get_db)):
 def get_recent_searches(db: Session = Depends(get_db)):
     service = SerpApiOrganicService(api_key=settings.SERPAPI_API_KEY, db=db)
     return service.get_recent_searches()
+
+
+@router.get("/usage/breakdown")
+def get_usage_breakdown(db: Session = Depends(get_db)):
+    """Usage per engine and feature, monthly spend against the optional budget,
+    and a cost estimate whose basis (plan, source, date) is stated. No search."""
+    return usage_breakdown(db, fetch_account_usage(settings.SERPAPI_API_KEY))

@@ -17,12 +17,13 @@ export const getTrendSummary = async (
 };
 
 export const getPriceTrends = async (
-  filters: { q?: string; market?: string } = {},
+  filters: { q?: string; market?: string; location?: string } = {},
   signal?: AbortSignal,
 ): Promise<TrendListResponse> => {
   const params = new URLSearchParams();
   if (filters.q) params.append('q', filters.q);
   if (filters.market) params.append('market', filters.market);
+  if (filters.location) params.append('location', filters.location);
   const suffix = params.toString() ? `?${params.toString()}` : '';
 
   const response = await api.get<TrendListResponse>(`/trends/prices${suffix}`, { signal });
@@ -30,11 +31,13 @@ export const getPriceTrends = async (
 };
 
 export const getAvailabilityTrends = async (
-  filters: { q?: string } = {},
+  filters: { q?: string; market?: string; location?: string } = {},
   signal?: AbortSignal,
 ): Promise<TrendListResponse> => {
   const params = new URLSearchParams();
   if (filters.q) params.append('q', filters.q);
+  if (filters.market) params.append('market', filters.market);
+  if (filters.location) params.append('location', filters.location);
   const suffix = params.toString() ? `?${params.toString()}` : '';
 
   const response = await api.get<TrendListResponse>(`/trends/availability${suffix}`, { signal });
@@ -42,12 +45,13 @@ export const getAvailabilityTrends = async (
 };
 
 export const getVisibilityTrends = async (
-  filters: { market?: string; metric?: string } = {},
+  filters: { market?: string; metric?: string; location?: string } = {},
   signal?: AbortSignal,
 ): Promise<TrendListResponse> => {
   const params = new URLSearchParams();
   if (filters.market) params.append('market', filters.market);
   if (filters.metric) params.append('metric', filters.metric);
+  if (filters.location) params.append('location', filters.location);
   const suffix = params.toString() ? `?${params.toString()}` : '';
 
   const response = await api.get<TrendListResponse>(`/trends/visibility${suffix}`, { signal });

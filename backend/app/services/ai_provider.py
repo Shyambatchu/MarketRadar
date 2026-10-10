@@ -4,10 +4,10 @@ The application is deliberately not built around any one vendor. Everything
 above this module talks to the ``AIProvider`` interface, so a provider is added
 later through configuration and a small adapter, without touching the analyst.
 
-No vendor SDK is shipped here on purpose: adding an unused dependency and a
-half-configured client would be worse than an explicit "not configured" state.
-``NotConfiguredProvider`` is the default, and it fails loudly rather than
-returning something that looks like analysis.
+One adapter is registered: ``anthropic`` (see ``anthropic_provider.py``),
+enabled with ``AI_PROVIDER=anthropic`` and ``AI_API_KEY``. Its SDK is imported
+only when it is configured. ``NotConfiguredProvider`` remains the default, and
+it fails loudly rather than returning something that looks like analysis.
 """
 import logging
 from typing import Optional, Protocol, runtime_checkable
@@ -60,7 +60,6 @@ class NotConfiguredProvider:
 
 
 #: Adapters register here so a provider can be enabled by configuration alone.
-#: Empty by design until a vendor adapter is added.
 PROVIDER_REGISTRY = {}
 
 
@@ -89,6 +88,14 @@ def get_ai_provider(provider_name: Optional[str] = None,
 
     try:
         return factory(api_key=key, model=getattr(settings, "AI_MODEL", None))
-    except Exception as exc:  # pragma: no cover - depends on a future adapter
+    except Exception as exc:  # e.g. the vendor SDK is not installed
         logger.warning("AI provider %r failed to initialise: %s", name, type(exc).__name__)
         return NotConfiguredProvider()
+
+
+def _anthropic_factory(api_key: str, model: Optional[str] = None):
+    from app.services.anthropic_provider import factory
+    return factory(api_key=api_key, model=model)
+
+
+register_provider("anthropic", _anthropic_factory)

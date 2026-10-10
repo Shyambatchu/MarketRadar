@@ -20,12 +20,14 @@ Nothing here names an industry, a market, a location or a company. The market
 and query are inputs; the only judgements made are about the shape of a web
 result and the strength of an identity match.
 """
+import json
 import re
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from app.models.audit_event import AuditEvent
 from app.models.competitor import CompetitorObservation
 from app.models.merchant import Merchant
 from app.schemas.competitor import (
@@ -52,6 +54,9 @@ REJECTED = "rejected"
 
 LOCAL = "local"
 ORGANIC = "organic"
+
+# A user's review of whether a business is a competitor. "unreviewed" clears it.
+REVIEW_STATUSES = {"confirmed", "rejected", "unreviewed"}
 
 # Shortest input that can meaningfully describe a market. Purely structural --
 # there is no list of acceptable industries anywhere, and there must not be.
@@ -562,6 +567,10 @@ class CompetitorService:
         competitor.latitude = merchant.latitude
         competitor.longitude = merchant.longitude
         competitor.first_seen_at = merchant.created_at
+        competitor.review_status = merchant.review_status
+        competitor.display_name = merchant.display_name
+        competitor.review_note = merchant.review_note
+        competitor.reviewed_at = merchant.reviewed_at
         return competitor, is_new
 
     # ------------------------------------------------------------------
@@ -570,10 +579,15 @@ class CompetitorService:
     def list_saved(self, market: Optional[str] = None,
                    location_resolved: Optional[str] = None,
                    status: Optional[str] = None,
-                   limit: int = 100) -> Tuple[int, List[Competitor]]:
+                   limit: int = 100,
+                   review_status: Optional[str] = None) -> Tuple[int, List[Competitor]]:
         query = self.db.query(Merchant)
         if status:
             query = query.filter(Merchant.status == status)
+        if review_status == "unreviewed":
+            query = query.filter(Merchant.review_status.is_(None))
+        elif review_status:
+            query = query.filter(Merchant.review_status == review_status)
         if market or location_resolved:
             query = query.join(
                 CompetitorObservation,
@@ -641,6 +655,8 @@ class CompetitorService:
                 merchant.address or merchant.latitude is not None),
             first_seen_at=merchant.created_at, last_seen_at=merchant.last_seen_at,
             evidence_count=len(observations),
+            review_status=merchant.review_status, display_name=merchant.display_name,
+            review_note=merchant.review_note, reviewed_at=merchant.reviewed_at,
             evidence=[
                 CompetitorEvidence(
                     source_type=o.source_type, source_url=o.source_url,
@@ -652,3 +668,44 @@ class CompetitorService:
                     reason=o.reason, position=o.position, rating=o.rating,
                     reviews=o.reviews, title=o.title, snippet=o.snippet)
                 for o in observations] if with_evidence else [])
+
+    # ------------------------------------------------------------------
+    # Human review
+    # ------------------------------------------------------------------
+    def review(self, merchant_id: int, review_status: Optional[str] = None,
+               display_name: Optional[str] = None,
+               review_note: Optional[str] = None) -> Optional[Competitor]:
+        """Record the user's judgement of a business, with an audit row.
+
+        Only the review fields change. The identity ``status`` and every
+        observation are left exactly as discovery recorded them.
+        Raises ValueError for an unknown review status.
+        """
+        merchant = self.db.query(Merchant).filter(Merchant.id == merchant_id).first()
+        if merchant is None:
+            return None
+
+        changes = {}
+        if review_status is not None:
+            if review_status not in REVIEW_STATUSES:
+                raise ValueError("review_status must be one of: "
+                                 + ", ".join(sorted(REVIEW_STATUSES)) + ".")
+            new = None if review_status == "unreviewed" else review_status
+            if new != merchant.review_status:
+                changes["review_status"] = [merchant.review_status, new]
+                merchant.review_status = new
+        for field, value in (("display_name", display_name), ("review_note", review_note)):
+            if value is None:
+                continue
+            new = value.strip() or None
+            if new != getattr(merchant, field):
+                changes[field] = [getattr(merchant, field), new]
+                setattr(merchant, field, new)
+
+        if changes:
+            merchant.reviewed_at = datetime.now(timezone.utc)
+            self.db.add(AuditEvent(entity_type="merchant", entity_id=merchant.id,
+                                   action="review_updated",
+                                   detail=json.dumps(changes)))
+            self.db.commit()
+        return self._to_schema(merchant, with_evidence=True)

@@ -98,6 +98,13 @@ class Competitor(BaseModel):
     evidence_count: int = 0
     evidence: List[CompetitorEvidence] = []
 
+    # The user's judgement, independent of ``status``.
+    # null (unreviewed) | confirmed | rejected
+    review_status: Optional[str] = None
+    display_name: Optional[str] = None
+    review_note: Optional[str] = None
+    reviewed_at: Optional[datetime] = None
+
 
 class RejectedResult(BaseModel):
     """A result that was not a business, retained so nothing vanishes silently."""
@@ -144,3 +151,12 @@ class CompetitorListResponse(BaseModel):
     """Saved competitors, reusable by later modules."""
     total: int
     competitors: List[Competitor]
+
+
+class CompetitorReviewUpdate(BaseModel):
+    """A user's review of a discovered business. Omitted fields are unchanged;
+    an empty string clears ``display_name`` or ``review_note``, and
+    ``review_status: "unreviewed"`` clears the decision."""
+    review_status: Optional[str] = None
+    display_name: Optional[str] = None
+    review_note: Optional[str] = None

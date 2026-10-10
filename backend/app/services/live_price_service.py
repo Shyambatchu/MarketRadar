@@ -5,6 +5,8 @@ from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.orm import Session
 
+from app.models.merchant import Merchant
+from app.models.product_observation import ProductObservation
 from app.providers.merchant_website_provider import MerchantWebsitePriceProvider
 from app.schemas.local_price import (
     ApiUsageReport, LocalPriceObservation, LocalPriceSearchResponse,
@@ -14,10 +16,11 @@ from app.services.api_budget import ApiBudgetManager
 from app.services.location_service import (
     LocationResolutionError, default_resolver,
 )
+from app.services.money import parse_price
 from app.services.merchant_identity import (
     match_merchant, normalize_domain, normalize_name,
 )
-from app.services.product_identity import match_product
+from app.services.product_identity import canonicalise, match_product
 from app.services.serpapi_organic_service import SerpApiProviderError
 
 CACHE_VERSION = "v2"
@@ -104,7 +107,8 @@ class LivePriceService:
     # ------------------------------------------------------------------
     def fetch_real_data(self, product: str, area: str, radius: int, db: Session,
                         reference_merchant_name: Optional[str] = None,
-                        hl: str = "en", gl: Optional[str] = None) -> LocalPriceSearchResponse:
+                        hl: str = "en", gl: Optional[str] = None,
+                        persist: bool = True) -> LocalPriceSearchResponse:
         budget = ApiBudgetManager(db, self.api_key)
         stages: List[StageStatus] = []
 
@@ -170,7 +174,7 @@ class LivePriceService:
         def apply_candidate(merchant, title, snippet, url, price, page_type,
                             is_range, ambiguous, source_type, source_domain,
                             evidence_scope, match_method, match_confidence,
-                            merchant_match_status):
+                            merchant_match_status, currency=None):
             nms = next((n for n in nearby if n.merchant == merchant["name"]), None)
             if nms is None or nms.price_status == "verified":
                 return
@@ -214,10 +218,13 @@ class LivePriceService:
                 return unavailable("size_unverified")
             if price is None:
                 return unavailable("price_unavailable")
+            if not currency:
+                return unavailable("currency_unknown")
 
             nms.price_status = "verified"
             nms.verification_reason = None
             nms.price = price
+            nms.currency = currency
             nms.price_source = source_type
 
             is_ref = bool(reference_merchant_name) and \
@@ -229,7 +236,7 @@ class LivePriceService:
                 merchant=merchant["name"], merchant_name=merchant["name"],
                 merchant_domain=merchant["domain"], product_name=title,
                 normalized_product_name=normalize_name(title),
-                size=verdict["observed_size"], price=price, currency="USD",
+                size=verdict["observed_size"], price=price, currency=currency,
                 source_type=source_type, source_domain=source_domain,
                 source_url=url, discovery_method="indexed_search",
                 observed_at=datetime.now(timezone.utc), snippet_text=snippet,
@@ -270,6 +277,7 @@ class LivePriceService:
                     merchant=m, title=obs["title"], snippet=obs["raw_snippet"],
                     url=obs["url"], price=obs["price"], page_type=obs["page_type"],
                     is_range=obs["is_range"], ambiguous=obs["ambiguous_price"],
+                    currency=obs.get("currency"),
                     source_type="merchant_website_indexed",
                     source_domain=obs["source_domain"], evidence_scope="catalog",
                     match_method="exact_domain", match_confidence="high",
@@ -313,10 +321,13 @@ class LivePriceService:
             title = item.get("title", "")
             source_name = item.get("source", "") or ""
             link = item.get("link") or item.get("product_link") or ""
-            try:
-                price = float(str(item.get("price", "")).replace("$", "").replace(",", ""))
-            except (TypeError, ValueError):
-                price = None
+            # The provider's own parse of the amount, with the currency read
+            # from the displayed price -- never assumed from the symbol alone.
+            parsed = parse_price(str(item.get("price") or ""), effective_gl)
+            price = item.get("extracted_price")
+            if not isinstance(price, (int, float)):
+                price = parsed.amount if parsed else None
+            currency = item.get("currency") if isinstance(item.get("currency"), str)                 and len(item.get("currency")) == 3 else (parsed.currency if parsed else None)
 
             shop_domain = normalize_domain(link)
             if not shop_domain and "." in source_name:
@@ -335,6 +346,7 @@ class LivePriceService:
             apply_candidate(
                 merchant=resolved["merchant"], title=title, snippet="", url=link,
                 price=price, page_type="product", is_range=False, ambiguous=False,
+                currency=currency,
                 source_type="google_shopping", source_domain=shop_domain,
                 evidence_scope="marketplace_listing",
                 match_method=resolved["method"], match_confidence=resolved["confidence"],
@@ -345,7 +357,9 @@ class LivePriceService:
         nearby.sort(key=lambda x: x.distance)
         verified_obs.sort(key=lambda x: x.price if x.price is not None else float("inf"))
 
-        prices = [o.price for o in verified_obs if o.price is not None]
+        currencies = sorted({o.currency for o in verified_obs if o.price is not None})
+        # Figures in different currencies are never averaged together.
+        prices = [o.price for o in verified_obs if o.price is not None]             if len(currencies) <= 1 else []
         sizes = sorted({o.size for o in verified_obs if o.size})
 
         reference_store = None
@@ -365,7 +379,19 @@ class LivePriceService:
             else:
                 unknown += 1
 
+        persisted = 0
+        # No session means nothing to write to (unit tests drive the funnel
+        # with a stubbed budget); that is "skipped", not a failure.
+        persist = persist and db is not None
+        if persist:
+            persisted = self._persist(db, product, nearby, merchant_identities,
+                                      provider_location)
+        stages.append(StageStatus(stage="persistence",
+                                  status="ok" if persist else "skipped",
+                                  results_count=persisted if persist else None))
+
         return LocalPriceSearchResponse(
+            persisted_observations=persisted,
             searched_product=product, searched_area=area, searched_radius=radius,
             search_center=search_center_dict, product_name=product, area=area,
             radius=radius,
@@ -373,6 +399,8 @@ class LivePriceService:
             average_price=round(sum(prices) / len(prices), 2) if prices else None,
             highest_price=max(prices) if prices else None,
             verified_sizes=sizes, mixed_size_statistics=len(sizes) > 1,
+            currency=currencies[0] if len(currencies) == 1 else None,
+            mixed_currency_statistics=len(currencies) > 1,
             nearby_merchants_discovered=len(merchant_identities),
             product_evidence_found=found, product_evidence_not_found=not_found,
             product_evidence_unknown=unknown, price_unavailable_count=price_unavailable,
@@ -390,10 +418,105 @@ class LivePriceService:
             shopping_exact_matches=counters["shopping_exact"],
             shopping_merchant_matches=counters["shopping_merchant_matches"],
             merchant_uncertain_count=counters["uncertain"],
-            verified_local_prices=len(prices),
+            verified_local_prices=sum(1 for o in verified_obs if o.price is not None),
             stages=stages,
             reference_price=reference_store.price if reference_store else None,
             reference_store=reference_store, nearby_merchants=nearby,
             verified_price_observations=verified_obs,
             api_usage=ApiUsageReport(**budget.get_usage_report()),
         )
+
+    # ------------------------------------------------------------------
+    # Persistence
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _persist(db: Session, product: str, nearby: List[NearbyMerchantStatus],
+                 identities: List[Dict], location_resolved: Optional[str]) -> int:
+        """Append what this run established, so it feeds Trends and Pulse.
+
+        Only merchants with evidence either way (found or specifically
+        contradicted) are recorded. A merchant that was never looked at, or
+        whose lookup produced nothing, is not a reading of that merchant, and
+        storing it as "unknown" would turn a gap in coverage into history.
+
+        Rows go into the same append-only ``product_observations`` table that
+        Products writes, filed under the product as the market -- the same
+        convention Products uses for a blank market -- and the provider's
+        canonical location, so both modules' readings land in one context.
+        ``discovery_method`` records that they came from Price Intelligence.
+        """
+        by_name = {m["name"]: m for m in identities}
+        written = 0
+        for status in nearby:
+            if status.product_status not in ("found", "not_found"):
+                continue
+            identity = by_name.get(status.merchant) or {}
+            merchant = _upsert_merchant(db, status.merchant, identity)
+            verified = status.price_status == "verified"
+            db.add(ProductObservation(
+                merchant_id=merchant.id,
+                product_query=product, normalized_query=canonicalise(product),
+                market=product, location_requested=None,
+                location_resolved=location_resolved,
+                product_name=status.product_name,
+                normalized_product_name=normalize_name(status.product_name or ""),
+                observed_size=status.product_size,
+                size_confirmed=bool(verified),
+                product_status=status.product_status,
+                price_status=status.price_status,
+                verification_reason=status.verification_reason,
+                price=status.price if verified else None,
+                currency=status.currency if verified else None,
+                source_type=status.price_source or (
+                    "google_shopping" if status.evidence_scope == "marketplace_listing"
+                    else "merchant_website_indexed"),
+                source_url=status.source_url, source_domain=status.source_domain,
+                discovery_method="price_intelligence",
+                page_type=None,
+                evidence_scope=status.evidence_scope or "catalog",
+                inventory_confirmed=False,
+                match_method="product_identity",
+                merchant_match_status=status.merchant_match_status))
+            written += 1
+        db.commit()
+        return written
+
+
+def _upsert_merchant(db: Session, name: str, identity: Dict) -> Merchant:
+    """The shared business identity, found by domain then place id.
+
+    Gaps are filled, never overwritten -- the same rule Competitors applies --
+    and a name alone never matches an existing merchant, because a name does
+    not identify a business across places.
+    """
+    domain = identity.get("domain") or None
+    place_id = identity.get("place_id") or None
+    merchant = None
+    if domain:
+        merchant = db.query(Merchant).filter(Merchant.normalized_domain == domain).first()
+    if merchant is None and place_id:
+        merchant = db.query(Merchant).filter(Merchant.place_id == place_id).first()
+    now = datetime.now(timezone.utc)
+    if merchant is None:
+        merchant = Merchant(
+            name=name, normalized_name=normalize_name(name),
+            website=identity.get("website") or None, normalized_domain=domain,
+            place_id=place_id, address=identity.get("address") or None,
+            latitude=identity.get("lat"), longitude=identity.get("lon"),
+            source="google_maps", entity_type="business",
+            # A structured map result with a place id or its own domain is the
+            # same evidence Competitors treats as verified.
+            status="verified" if (place_id or domain) else "discovered",
+            last_seen_at=now)
+        db.add(merchant)
+        db.flush()
+    else:
+        for field, value in (("website", identity.get("website")),
+                             ("normalized_domain", domain), ("place_id", place_id),
+                             ("address", identity.get("address")),
+                             ("latitude", identity.get("lat")),
+                             ("longitude", identity.get("lon"))):
+            if value and not getattr(merchant, field):
+                setattr(merchant, field, value)
+        merchant.last_seen_at = now
+    return merchant

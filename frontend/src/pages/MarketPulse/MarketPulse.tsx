@@ -2,18 +2,19 @@ import { useState, useEffect } from 'react';
 import {
   Alert, Autocomplete, Box, Button, Chip, CircularProgress, Grid, Link, Paper,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tab, Tabs,
-  TextField, Tooltip, Typography,
+  TextField, Tooltip, Skeleton, Typography,
 } from '@mui/material';
 import InsightsOutlinedIcon from '@mui/icons-material/InsightsOutlined';
 import SearchIcon from '@mui/icons-material/Search';
-import { isAxiosError } from 'axios';
 
+import { errorMessage, formatMoney, humanize, isCanceled } from '../../utils/format';
 import PageHeader from '../../components/PageHeader/PageHeader';
 import EmptyState from '../../components/EmptyState/EmptyState';
 import { getMarketPulse, getMarketPulseOptions } from '../../services/marketPulseApi';
 import type {
-  MarketOption, MarketPulseResponse,
+  MarketOption, MarketPulseResponse, PriceEntry,
 } from '../../types/marketPulse';
+import type { TrendSeries } from '../../types/trend';
 
 /** Status colours describe evidence strength, never business quality. */
 const STATUS_COLOR: Record<string, 'success' | 'info' | 'warning' | 'default'> = {
@@ -43,8 +44,44 @@ const formatDate = (value: string | null): string =>
     year: 'numeric', month: 'short', day: 'numeric',
   }) : '—';
 
-const formatPrice = (price: number | null, currency: string | null): string =>
-  price === null ? '—' : `${currency === 'USD' ? '$' : ''}${price.toFixed(2)}`;
+// The ordinal the backend uses to detect availability changes. It is not a
+// score, so it is shown as its label, never as a number.
+const AVAILABILITY_LABEL: Record<string, string> = {
+  '1': 'found', '0': 'unknown', '-1': 'not_found',
+};
+
+/**
+ * Price trend series carry no currency of their own. It is taken from the
+ * verified price rows for the same product and merchant only when those rows
+ * agree on exactly one currency; otherwise the bare number is shown.
+ */
+const seriesCurrency = (series: TrendSeries, prices: PriceEntry[]): string | null => {
+  const currencies = new Set(
+    prices
+      .filter((p) => (p.product_name || p.product_query) === series.subject
+        && (!p.merchant || !series.context || series.context.startsWith(p.merchant)))
+      .map((p) => p.currency)
+      .filter((c): c is string => Boolean(c)),
+  );
+  return currencies.size === 1 ? [...currencies][0] : null;
+};
+
+const formatTrendValue = (
+  series: TrendSeries, which: 'first' | 'last', prices: PriceEntry[],
+): string => {
+  const value = which === 'first' ? series.first_value : series.last_value;
+  if (value === null) return '—';
+  switch (series.metric) {
+    case 'price':
+      return formatMoney(value, seriesCurrency(series, prices));
+    case 'availability': {
+      const point = which === 'first' ? series.points[0] : series.points[series.points.length - 1];
+      return humanize(point?.label ?? AVAILABILITY_LABEL[String(value)] ?? String(value));
+    }
+    default:
+      return String(value);
+  }
+};
 
 const optionLabel = (o: MarketOption): string =>
   `${o.market ?? 'Unspecified market'} — ${o.location ?? 'no location'}`;
@@ -65,6 +102,26 @@ const MarketPulse = () => {
   const [data, setData] = useState<MarketPulseResponse | null>(null);
   const [tab, setTab] = useState(0);
 
+  // Reading a snapshot is a database read, so it loads as soon as a market is
+  // chosen; there is nothing to confirm before spending.
+  const load = async (option: MarketOption | null = selected) => {
+    if (!option) return;
+    setLoading(true);
+    setError(null);
+    // A failed reload must not leave the previous context on screen.
+    setData(null);
+    try {
+      setData(await getMarketPulse({
+        market: option.market ?? undefined,
+        location: option.location ?? undefined,
+      }));
+    } catch (err) {
+      setError(errorMessage(err, 'Unable to load the market snapshot.'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Choices come from history, so a selection always refers to something
   // actually observed. No market category is invented.
   useEffect(() => {
@@ -72,36 +129,23 @@ const MarketPulse = () => {
     getMarketPulseOptions(controller.signal)
       .then((res) => {
         setOptions(res.options);
-        if (res.options.length === 1) setSelected(res.options[0]);
+        // Open on the most recently observed market rather than an empty page.
+        const selectable = res.options.filter((o) => o.market && o.location)
+          .sort((a, b) => (b.last_observed_at ?? '').localeCompare(a.last_observed_at ?? ''));
+        if (selectable.length > 0) {
+          setSelected(selectable[0]);
+          load(selectable[0]);
+        }
       })
       .catch((err) => {
-        if (!isAxiosError(err) || err.code !== 'ERR_CANCELED') {
-          setError('Unable to load observed markets. Is the backend running?');
+        if (!isCanceled(err)) {
+          setError(errorMessage(err, 'Unable to load observed markets. Is the backend running?'));
         }
       })
       // An aborted (StrictMode) request must not end the loading state early.
       .finally(() => { if (!controller.signal.aborted) setLoadingOptions(false); });
     return () => controller.abort();
   }, []);
-
-  const load = async () => {
-    if (!selected) return;
-    setLoading(true);
-    setError(null);
-    // A failed reload must not leave the previous context on screen.
-    setData(null);
-    try {
-      setData(await getMarketPulse({
-        market: selected?.market ?? undefined,
-        location: selected?.location ?? undefined,
-      }));
-    } catch (err) {
-      const detail = isAxiosError(err) ? err.response?.data?.detail : null;
-      setError(detail || 'Unable to load the market snapshot.');
-    } finally {
-      setLoading(false);
-    }
-  };
 
   const quality = data?.data_quality;
 
@@ -119,7 +163,7 @@ const MarketPulse = () => {
               size="small"
               options={options}
               value={selected}
-              onChange={(_, v) => { setSelected(v); setData(null); setError(null); }}
+              onChange={(_, v) => { setSelected(v); setData(null); setError(null); if (v) load(v); }}
               // An option missing its market or location cannot be requested
               // on its own: omitting the filter would load every market.
               getOptionDisabled={(o) => !o.market || !o.location}
@@ -150,11 +194,12 @@ const MarketPulse = () => {
           </Grid>
           <Grid size={{ xs: 12, sm: 3 }}>
             <Button
-              fullWidth variant="contained" sx={{ height: 40 }}
+              fullWidth sx={{ height: 40 }}
               startIcon={loading ? <CircularProgress size={20} color="inherit" /> : <SearchIcon />}
-              onClick={load} disabled={loading || loadingOptions || !selected}
+              onClick={() => load()} disabled={loading || loadingOptions || !selected}
+              variant="outlined"
             >
-              Load snapshot
+              Refresh
             </Button>
           </Grid>
         </Grid>
@@ -168,6 +213,18 @@ const MarketPulse = () => {
       </Paper>
 
       {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
+
+      {loading && !data && (
+        <Box aria-busy="true" aria-label="Loading snapshot">
+          <Grid container spacing={2} sx={{ mb: 3 }}>
+            {[0, 1, 2, 3].map((i) => (
+              <Grid key={i} size={{ xs: 6, md: 3 }}><Skeleton variant="rounded" height={88} /></Grid>
+            ))}
+          </Grid>
+          <Skeleton variant="rounded" height={40} sx={{ mb: 2 }} />
+          {[0, 1, 2, 3].map((i) => <Skeleton key={i} variant="rounded" height={44} sx={{ mb: 1 }} />)}
+        </Box>
+      )}
 
       {data && !data.has_data && (
         <EmptyState
@@ -380,9 +437,9 @@ const MarketPulse = () => {
                 {data.price_statistics.detail ?? 'No verified price observations.'}
                 {data.price_statistics.sufficient && (
                   <Box sx={{ mt: 1 }}>
-                    Lowest {formatPrice(data.price_statistics.lowest, data.price_statistics.currency)} ·
-                    {' '}Average {formatPrice(data.price_statistics.average, data.price_statistics.currency)} ·
-                    {' '}Highest {formatPrice(data.price_statistics.highest, data.price_statistics.currency)}
+                    Lowest {formatMoney(data.price_statistics.lowest, data.price_statistics.currency)} ·
+                    {' '}Average {formatMoney(data.price_statistics.average, data.price_statistics.currency)} ·
+                    {' '}Highest {formatMoney(data.price_statistics.highest, data.price_statistics.currency)}
                   </Box>
                 )}
               </Alert>
@@ -419,7 +476,7 @@ const MarketPulse = () => {
                           <TableCell>{p.merchant ?? '—'}</TableCell>
                           <TableCell align="right">
                             <Typography variant="body2" color="success.main">
-                              {formatPrice(p.price, p.currency)}
+                              {formatMoney(p.price, p.currency)}
                             </Typography>
                           </TableCell>
                           <TableCell>
@@ -533,8 +590,8 @@ const MarketPulse = () => {
                               {t.context ?? '—'}
                             </Typography>
                           </TableCell>
-                          <TableCell align="right">{t.first_value ?? '—'}</TableCell>
-                          <TableCell align="right">{t.last_value ?? '—'}</TableCell>
+                          <TableCell align="right">{formatTrendValue(t, 'first', data.prices)}</TableCell>
+                          <TableCell align="right">{formatTrendValue(t, 'last', data.prices)}</TableCell>
                           <TableCell align="right">
                             <Tooltip title={`${t.distinct_points} distinct measurement(s) from ${t.raw_observations} stored observation(s).`}>
                               <Typography variant="body2">

@@ -1,23 +1,30 @@
 import { useState, useEffect, useRef } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   Alert, Box, Button, Chip, CircularProgress, Dialog, DialogContent,
-  DialogTitle, Divider, Grid, IconButton, Link, Paper, Table, TableBody,
-  TableCell, TableContainer, TableHead, TableRow, TextField, Tooltip,
-  Typography,
+  DialogTitle, Divider, Grid, IconButton, InputAdornment, Link, Paper, Skeleton,
+  Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
+  TextField, Tooltip, Typography,
 } from '@mui/material';
 import SearchIcon from '@mui/icons-material/Search';
 import CloseIcon from '@mui/icons-material/Close';
+import BookmarkAddOutlinedIcon from '@mui/icons-material/BookmarkAddOutlined';
+import FilterListIcon from '@mui/icons-material/FilterList';
+import ChevronRightIcon from '@mui/icons-material/ChevronRight';
 import Inventory2OutlinedIcon from '@mui/icons-material/Inventory2Outlined';
 import { isAxiosError } from 'axios';
 
 import PageHeader from '../../components/PageHeader/PageHeader';
 import EmptyState from '../../components/EmptyState/EmptyState';
+import ExportButton from '../../components/ExportButton/ExportButton';
 import {
   getProductObservation, listProductObservations, searchProducts,
 } from '../../services/productApi';
+import { exportUrl, saveSearch } from '../../services/intelligenceApi';
 import type {
   ProductEvidence, ProductObservationRecord, ProductSearchResponse,
 } from '../../types/product';
+import { errorMessage, formatDate, formatMoney } from '../../utils/format';
 
 /**
  * Colours describe evidence strength, never product quality.
@@ -48,20 +55,49 @@ const SCOPE_HELP: Record<string, string> = {
   marketplace_listing: 'A marketplace listing attributed to this merchant.',
 };
 
-const formatDate = (value: string | null): string =>
-  value ? new Date(value).toLocaleDateString(undefined, {
-    year: 'numeric', month: 'short', day: 'numeric',
-  }) : '—';
+/**
+ * What the Details dialog shows. A saved record carries an id; a live
+ * evidence row carries the same fields (plus the search's context) without one.
+ */
+type DetailRecord = Omit<ProductObservationRecord, 'id'> & { id: number | null };
 
-const formatPrice = (price: number | null, currency: string | null): string =>
-  price === null ? '—'
-    : currency === 'USD' || !currency ? `$${price.toFixed(2)}`
-      : `${price.toFixed(2)} ${currency}`;
+/** Build a detail view from a live row: everything the dialog needs is in it. */
+const evidenceDetail = (e: ProductEvidence, result: ProductSearchResponse): DetailRecord => ({
+  id: null,
+  merchant_id: e.merchant_id,
+  merchant_name: e.merchant,
+  merchant_domain: e.merchant_domain,
+  product_query: result.product_query,
+  market: result.market,
+  location_resolved: result.location_resolved,
+  product_name: e.product_name,
+  observed_size: e.observed_size,
+  size_confirmed: e.size_confirmed,
+  product_status: e.product_status,
+  price_status: e.price_status,
+  verification_reason: e.verification_reason,
+  price: e.price,
+  currency: e.currency,
+  source_type: e.source_type,
+  source_url: e.source_url,
+  source_domain: e.source_domain,
+  discovery_method: e.discovery_method,
+  page_type: e.page_type,
+  evidence_scope: e.evidence_scope,
+  inventory_confirmed: e.inventory_confirmed,
+  match_method: e.match_method,
+  match_reason: e.match_reason,
+  merchant_match_status: e.merchant_match_status,
+  snippet: e.snippet,
+  observed_at: e.observed_at,
+});
 
 /** A saved record and a live evidence row share the fields the table shows. */
 type Row = {
   key: string;
   id: number | null;
+  /** Index into the live result's evidence, for live rows. */
+  evidenceIndex: number | null;
   merchant: string;
   merchantDomain: string | null;
   productName: string | null;
@@ -81,7 +117,7 @@ type Row = {
 };
 
 const fromEvidence = (e: ProductEvidence, i: number): Row => ({
-  key: `e${i}`, id: null, merchant: e.merchant, merchantDomain: e.merchant_domain,
+  key: `e${i}`, id: null, evidenceIndex: i, merchant: e.merchant, merchantDomain: e.merchant_domain,
   productName: e.product_name, observedSize: e.observed_size,
   sizeConfirmed: e.size_confirmed, productStatus: e.product_status,
   priceStatus: e.price_status, verificationReason: e.verification_reason,
@@ -91,7 +127,7 @@ const fromEvidence = (e: ProductEvidence, i: number): Row => ({
 });
 
 const fromRecord = (r: ProductObservationRecord): Row => ({
-  key: `r${r.id}`, id: r.id, merchant: r.merchant_name ?? '—',
+  key: `r${r.id}`, id: r.id, evidenceIndex: null, merchant: r.merchant_name ?? '—',
   merchantDomain: r.merchant_domain, productName: r.product_name,
   observedSize: r.observed_size, sizeConfirmed: r.size_confirmed,
   productStatus: r.product_status, priceStatus: r.price_status,
@@ -102,9 +138,12 @@ const fromRecord = (r: ProductObservationRecord): Row => ({
 });
 
 const Products = () => {
-  const [query, setQuery] = useState('');
+  const [searchParams] = useSearchParams();
+  // Links from other pages prefill the form; nothing runs (or spends a
+  // credit) until the user presses Search.
+  const [query, setQuery] = useState(() => searchParams.get('q') ?? '');
   const [market, setMarket] = useState('');
-  const [location, setLocation] = useState('');
+  const [location, setLocation] = useState(() => searchParams.get('location') ?? '');
 
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,25 +152,51 @@ const Products = () => {
   const [savedTotal, setSavedTotal] = useState(0);
   // A failed load is reported, never shown as an empty history.
   const [savedError, setSavedError] = useState<string | null>(null);
-  const [detail, setDetail] = useState<ProductObservationRecord | null>(null);
+  // The filter the saved list currently answers (null before the first
+  // load); loading is derived from it so no effect sets state synchronously.
+  const [loadedFilter, setLoadedFilter] = useState<string | null>(null);
+  // Filter for the saved list (server-side ?q=), debounced while typing.
+  const [savedFilter, setSavedFilter] = useState('');
+  const [appliedFilter, setAppliedFilter] = useState('');
+  const [detail, setDetail] = useState<DetailRecord | null>(null);
+  const [detailLoadingId, setDetailLoadingId] = useState<number | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+
+  const [lastSearch, setLastSearch] = useState<{ query: string; market: string; location: string } | null>(null);
+  const [saveState, setSaveState] = useState<{ saving: boolean; message: string | null; error: boolean }>(
+    { saving: false, message: null, error: false });
 
   const isSearching = useRef(false);
 
-  // Saved observations load on mount so the page is useful on arrival.
-  // Database read only — no SerpApi credit.
+  useEffect(() => {
+    const handle = window.setTimeout(() => setAppliedFilter(savedFilter.trim()), 400);
+    return () => window.clearTimeout(handle);
+  }, [savedFilter]);
+
+  // Saved observations load on mount (and when the filter changes) so the
+  // page is useful on arrival. Database read only — no SerpApi credit.
   useEffect(() => {
     const controller = new AbortController();
-    listProductObservations({}, controller.signal)
-      .then((data) => { setSaved(data.observations); setSavedTotal(data.total); })
+    listProductObservations({ q: appliedFilter || undefined }, controller.signal)
+      .then((data) => {
+        setSaved(data.observations);
+        setSavedTotal(data.total);
+        setSavedError(null);
+        setLoadedFilter(appliedFilter);
+      })
       .catch((err) => {
         if (!isAxiosError(err) || err.code !== 'ERR_CANCELED') {
           setSavedError(isAxiosError(err) && !err.response
             ? 'Saved product observations could not be loaded. Is the backend running?'
-            : 'Saved product observations could not be loaded.');
+            : errorMessage(err, 'Saved product observations could not be loaded.'));
         }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoadedFilter(appliedFilter);
       });
     return () => controller.abort();
-  }, []);
+  }, [appliedFilter]);
+  const savedLoading = loadedFilter !== appliedFilter;
 
   const handleSearch = async () => {
     // A location is required: product evidence comes from the merchants in a
@@ -141,15 +206,19 @@ const Products = () => {
     setLoading(true);
     setError(null);
     setResult(null);
+    setLastSearch(null);
+    setSaveState({ saving: false, message: null, error: false });
 
     try {
-      const data = await searchProducts({
-        query: query.trim(), market: market.trim(), location: location.trim(),
-      });
+      const params = { query: query.trim(), market: market.trim(), location: location.trim() };
+      const data = await searchProducts(params);
       setResult(data);
+      setLastSearch(params);
       try {
-        const list = await listProductObservations({});
+        const list = await listProductObservations({ q: appliedFilter || undefined });
         setSaved(list.observations);
+        setSavedTotal(list.total);
+        setSavedError(null);
       } catch {
         // Refreshing the saved list is cosmetic; the result stands.
       }
@@ -160,6 +229,8 @@ const Products = () => {
         // "product not found".
         if (err.response?.status === 400) {
           setError(detailMessage || 'That search is missing something it needs. Provide a product and a location.');
+        } else if (err.response?.status === 429) {
+          setError(detailMessage || 'The search budget is used up, so no new product search ran. Saved observations remain available.');
         } else if (err.response?.status === 422) {
           setError(detailMessage || 'That location could not be matched to a supported search location.');
         } else if (err.response?.status === 502) {
@@ -179,11 +250,43 @@ const Products = () => {
   };
 
   const openDetail = async (row: Row) => {
-    if (row.id === null) return;
+    // One detail at a time: rows are clickable, so a second click must not
+    // start a competing load.
+    if (detailLoadingId !== null) return;
+    setDetailError(null);
+    // A live row already carries every field the dialog shows.
+    if (row.id === null) {
+      if (result && row.evidenceIndex !== null && result.evidence[row.evidenceIndex]) {
+        setDetail(evidenceDetail(result.evidence[row.evidenceIndex], result));
+      }
+      return;
+    }
+    setDetailLoadingId(row.id);
     try {
       setDetail(await getProductObservation(row.id));
-    } catch {
-      // Nothing more to show than the table already has.
+    } catch (err) {
+      setDetailError(errorMessage(err, 'The details of this observation could not be loaded.'));
+    } finally {
+      setDetailLoadingId(null);
+    }
+  };
+
+  const handleSaveSearch = async () => {
+    if (!lastSearch) return;
+    setSaveState({ saving: true, message: null, error: false });
+    try {
+      const res = await saveSearch({
+        module: 'products',
+        query: lastSearch.query,
+        market: lastSearch.market || undefined,
+        location: lastSearch.location || undefined,
+      });
+      setSaveState({
+        saving: false, error: false,
+        message: res.created ? 'Search saved.' : 'This search was already saved.',
+      });
+    } catch (err) {
+      setSaveState({ saving: false, error: true, message: errorMessage(err, 'The search could not be saved.') });
     }
   };
 
@@ -194,12 +297,20 @@ const Products = () => {
   const problemStages = result
     ? result.stages.filter((s) => s.status === 'error' || s.status === 'degraded')
     : [];
+  // Exports read stored evidence, scoped to what the page is showing.
+  const exportQuery = result ? result.product_query : (appliedFilter || undefined);
 
   return (
     <Box>
       <PageHeader
         title="Products"
         subtitle="Discover products and product evidence across merchants and markets."
+        action={(
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1}>
+            <ExportButton href={exportUrl('products', { q: exportQuery })} label="Export observations" />
+            <ExportButton href={exportUrl('prices', { q: exportQuery })} label="Export verified prices" />
+          </Stack>
+        )}
       />
 
       <Paper sx={{ p: 3, mb: 4 }}>
@@ -251,6 +362,21 @@ const Products = () => {
             {result.cache_hit && (
               <Chip size="small" label="Cached result" color="success" variant="outlined" />
             )}
+            {lastSearch && (
+              <Button size="small" onClick={handleSaveSearch} disabled={saveState.saving}
+                      startIcon={saveState.saving
+                        ? <CircularProgress size={16} /> : <BookmarkAddOutlinedIcon />}>
+                Save search
+              </Button>
+            )}
+            {saveState.message && (
+              <Typography variant="caption" color={saveState.error ? 'error' : 'success.main'}>
+                {saveState.message}
+              </Typography>
+            )}
+            <Button size="small" onClick={() => { setResult(null); setLastSearch(null); }}>
+              Back to saved observations
+            </Button>
           </Box>
         )}
       </Paper>
@@ -262,6 +388,11 @@ const Products = () => {
       ))}
 
       {error && <Alert severity="error" sx={{ mb: 4 }}>{error}</Alert>}
+      {detailError && (
+        <Alert severity="error" sx={{ mb: 2 }} onClose={() => setDetailError(null)}>
+          {detailError}
+        </Alert>
+      )}
 
       {result && (
         <Paper variant="outlined" elevation={0} sx={{ p: 2, mb: 3 }}>
@@ -290,15 +421,39 @@ const Products = () => {
         </Paper>
       )}
 
-      {showingSaved && savedError ? (
+      {showingSaved && (
+        <TextField
+          size="small" label="Filter saved observations" placeholder="Product name or query"
+          value={savedFilter} onChange={(e) => setSavedFilter(e.target.value)}
+          sx={{ mb: 2, width: { xs: '100%', sm: 320 } }}
+          slotProps={{
+            input: {
+              startAdornment: (
+                <InputAdornment position="start"><FilterListIcon fontSize="small" /></InputAdornment>
+              ),
+            },
+          }}
+        />
+      )}
+
+      {showingSaved && savedLoading ? (
+        <Paper sx={{ p: 2 }} aria-busy="true" aria-label="Loading saved observations">
+          <Skeleton variant="text" width={260} height={32} sx={{ mb: 1 }} />
+          {[0, 1, 2, 3, 4].map((i) => (
+            <Skeleton key={i} variant="rectangular" height={36} sx={{ mb: 1, borderRadius: 1 }} />
+          ))}
+        </Paper>
+      ) : showingSaved && savedError ? (
         <Alert severity="error">{savedError}</Alert>
       ) : rows.length === 0 ? (
         <EmptyState
           title={showingSaved
-            ? 'No product observations yet'
+            ? (appliedFilter ? `No saved observations match “${appliedFilter}”` : 'No product observations yet')
             : 'No product evidence was gathered for this search'}
           description={showingSaved
-            ? 'Enter a product and a location (and optionally a market) to search merchant catalogues for product evidence.'
+            ? (appliedFilter
+              ? 'Clear or change the filter to see other saved observations.'
+              : 'Enter a product and a location (and optionally a market) to search merchant catalogues for product evidence.')
             : result && result.merchants_considered === 0
               ? 'No merchants were identified for this market and location, so there were no catalogues to search.'
               : 'Merchants were found, but none of their catalogues produced usable product evidence.'}
@@ -312,102 +467,90 @@ const Products = () => {
                 ? `showing ${saved.length} of ${savedTotal}` : saved.length})`
               : `Product evidence (${rows.length})`}
           </Typography>
-          <TableContainer component={Paper}>
-            <Table size="small">
+          <TableContainer component={Paper} variant="outlined">
+            <Table size="small" sx={{ minWidth: 680 }}>
               <TableHead>
-                <TableRow>
+                <TableRow sx={{ '& th': { fontWeight: 600, color: 'text.secondary', whiteSpace: 'nowrap' } }}>
                   <TableCell>Product</TableCell>
                   <TableCell>Merchant</TableCell>
-                  <TableCell>Domain</TableCell>
-                  <TableCell>Variant / Size</TableCell>
-                  <TableCell>Evidence</TableCell>
                   <TableCell align="right">Price</TableCell>
                   <TableCell>Status</TableCell>
                   <TableCell>Observed</TableCell>
-                  {showingSaved && <TableCell />}
+                  <TableCell padding="checkbox" />
                 </TableRow>
               </TableHead>
               <TableBody>
-                {rows.map((r) => (
-                  <TableRow key={r.key} hover>
-                    <TableCell>
-                      <Typography variant="subtitle2">
-                        {r.productName || <Box component="span" sx={{ color: 'text.disabled' }}>Not identified</Box>}
-                      </Typography>
-                      {r.market && (
-                        <Typography variant="caption" color="text.secondary">{r.market}</Typography>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="body2">{r.merchant}</Typography>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption" color="text.secondary">
-                        {r.merchantDomain || 'Not reported'}
-                      </Typography>
-                    </TableCell>
-                    <TableCell>
-                      {r.observedSize ? (
-                        <Tooltip title={r.sizeConfirmed
-                          ? 'The requested size was observed in the evidence.'
-                          : 'A size was observed, but it is not the one requested — so no price is verified.'}>
-                          <Chip size="small" variant="outlined" label={r.observedSize}
-                                color={r.sizeConfirmed ? 'default' : 'warning'} />
-                        </Tooltip>
-                      ) : (
-                        <Typography variant="caption" color="text.disabled">—</Typography>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Tooltip title={SCOPE_HELP[r.evidenceScope] ?? ''}>
-                        <Chip size="small" variant="outlined"
-                              label={r.evidenceScope === 'catalog' ? 'Catalogue'
-                                : r.evidenceScope === 'store_inventory' ? 'Store inventory'
-                                  : r.evidenceScope === 'marketplace_listing' ? 'Marketplace'
-                                    : r.evidenceScope || 'Unknown'} />
-                      </Tooltip>
-                      {r.pageType && (
-                        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-                          {r.pageType} page
+                {rows.map((r) => {
+                  const scopeLabel = r.evidenceScope === 'catalog' ? 'Catalogue'
+                    : r.evidenceScope === 'store_inventory' ? 'Store inventory'
+                      : r.evidenceScope === 'marketplace_listing' ? 'Marketplace'
+                        : r.evidenceScope || 'Unknown';
+                  return (
+                    <TableRow key={r.key} hover onClick={() => openDetail(r)} sx={{ cursor: 'pointer' }}>
+                      <TableCell sx={{ maxWidth: 300 }}>
+                        <Typography variant="body2" sx={{ fontWeight: 600 }} noWrap title={r.productName ?? undefined}>
+                          {r.productName || <Box component="span" sx={{ color: 'text.disabled', fontWeight: 400 }}>Not identified</Box>}
                         </Typography>
-                      )}
-                    </TableCell>
-                    <TableCell align="right">
-                      {r.priceStatus === 'verified' ? (
-                        <Tooltip title={PRICE_STATUS_HELP.verified}>
-                          <Typography variant="body2" color="success.main">
-                            {formatPrice(r.price, r.currency)}
-                          </Typography>
-                        </Tooltip>
-                      ) : (
-                        <Tooltip title={`${PRICE_STATUS_HELP[r.priceStatus] ?? ''}${
-                          r.verificationReason ? ` (${r.verificationReason.replace(/_/g, ' ')})` : ''}`}>
-                          <Typography variant="caption" color="text.secondary">
-                            {r.priceStatus === 'unavailable' ? 'Unavailable' : '—'}
-                          </Typography>
-                        </Tooltip>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Tooltip title={`${PRODUCT_STATUS_HELP[r.productStatus] ?? ''}${
-                        r.verificationReason ? ` (${r.verificationReason.replace(/_/g, ' ')})` : ''}`}>
-                        <Chip size="small" variant="outlined"
-                              label={r.productStatus.replace(/_/g, ' ')}
-                              color={PRODUCT_STATUS_COLOR[r.productStatus] ?? 'default'} />
-                      </Tooltip>
-                    </TableCell>
-                    <TableCell>
-                      <Typography variant="caption" color="text.secondary">
-                        {formatDate(r.observedAt)}
-                      </Typography>
-                    </TableCell>
-                    {showingSaved && (
-                      <TableCell>
-                        <Button size="small" onClick={() => openDetail(r)}>Details</Button>
+                        <Box sx={{ display: 'flex', gap: 0.75, alignItems: 'center', mt: 0.25 }}>
+                          {r.observedSize && (
+                            <Tooltip title={r.sizeConfirmed
+                              ? 'The requested size was observed in the evidence.'
+                              : 'A size was observed, but not the one requested, so no price is verified.'}>
+                              <Chip size="small" variant="outlined" label={r.observedSize}
+                                    color={r.sizeConfirmed ? 'default' : 'warning'} sx={{ height: 20 }} />
+                            </Tooltip>
+                          )}
+                          {r.market && (
+                            <Typography variant="caption" color="text.secondary" noWrap>{r.market}</Typography>
+                          )}
+                        </Box>
                       </TableCell>
-                    )}
-                  </TableRow>
-                ))}
+                      <TableCell sx={{ maxWidth: 220 }}>
+                        <Typography variant="body2" noWrap title={r.merchant}>{r.merchant}</Typography>
+                        <Typography variant="caption" color="text.secondary" noWrap sx={{ display: 'block' }}>
+                          {r.merchantDomain || 'No website reported'}
+                        </Typography>
+                      </TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                        {r.priceStatus === 'verified' ? (
+                          <Tooltip title={PRICE_STATUS_HELP.verified}>
+                            <Typography variant="body2" sx={{ fontWeight: 600 }} color="success.main">
+                              {formatMoney(r.price, r.currency)}
+                            </Typography>
+                          </Tooltip>
+                        ) : (
+                          <Tooltip title={`${PRICE_STATUS_HELP[r.priceStatus] ?? ''}${
+                            r.verificationReason ? ` (${r.verificationReason.replace(/_/g, ' ')})` : ''}`}>
+                            <Typography variant="caption" color="text.secondary">
+                              {r.priceStatus === 'unavailable' ? 'Not verified' : '—'}
+                            </Typography>
+                          </Tooltip>
+                        )}
+                      </TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        <Tooltip title={`${PRODUCT_STATUS_HELP[r.productStatus] ?? ''}${
+                          r.verificationReason ? ` (${r.verificationReason.replace(/_/g, ' ')})` : ''}`}>
+                          <Chip size="small" variant="outlined"
+                                label={r.productStatus.replace(/_/g, ' ')}
+                                color={PRODUCT_STATUS_COLOR[r.productStatus] ?? 'default'} />
+                        </Tooltip>
+                        <Tooltip title={SCOPE_HELP[r.evidenceScope] ?? ''}>
+                          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                            {scopeLabel}{r.pageType ? ` · ${r.pageType} page` : ''}
+                          </Typography>
+                        </Tooltip>
+                      </TableCell>
+                      <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                        <Typography variant="caption" color="text.secondary">{formatDate(r.observedAt)}</Typography>
+                      </TableCell>
+                      <TableCell padding="checkbox">
+                        {detailLoadingId !== null && detailLoadingId === r.id
+                          ? <CircularProgress size={16} />
+                          : <ChevronRightIcon fontSize="small" sx={{ color: 'text.secondary' }} aria-hidden />}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
               </TableBody>
             </Table>
           </TableContainer>
@@ -473,9 +616,10 @@ const Products = () => {
                 </Typography>
                 <Typography variant="caption" color="text.secondary">
                   searched as “{detail.product_query}”
+                  {detail.id === null ? ' · from this search' : ''}
                 </Typography>
               </Box>
-              <IconButton onClick={() => setDetail(null)} size="small">
+              <IconButton onClick={() => setDetail(null)} size="small" aria-label="Close">
                 <CloseIcon />
               </IconButton>
             </DialogTitle>
@@ -489,7 +633,8 @@ const Products = () => {
                   ['Location', detail.location_resolved || 'Not recorded'],
                   ['Product status', detail.product_status.replace(/_/g, ' ')],
                   ['Price status', detail.price_status],
-                  ['Price', formatPrice(detail.price, detail.currency)],
+                  ['Price', formatMoney(detail.price, detail.currency)],
+                  ['Currency', detail.currency || 'Not reported'],
                   ['Observed size', detail.observed_size || 'Not reported'],
                   ['Requested size confirmed', detail.size_confirmed ? 'Yes' : 'No'],
                   ['Evidence scope', detail.evidence_scope],

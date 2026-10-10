@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import text
 from serpapi import GoogleSearch
 
+from app.config import settings
 from app.models.serpapi_models import SearchCache
 
 logger = logging.getLogger("api_budget")
@@ -77,6 +78,33 @@ def classify_error(message: str, exc: Optional[BaseException] = None) -> str:
     return ERROR_PROVIDER
 
 
+# Expired cache rows are kept this long (for inspection), then deleted.
+CACHE_RETENTION_DAYS = 30
+
+
+def prune_expired_cache(engine, retention_days: int = CACHE_RETENTION_DAYS) -> int:
+    """Delete cache rows that expired more than ``retention_days`` ago."""
+    cutoff = datetime.now(timezone.utc) - timedelta(days=retention_days)
+    with engine.begin() as connection:
+        result = connection.execute(
+            text("DELETE FROM search_cache WHERE expires_at < :cutoff"),
+            {"cutoff": cutoff.strftime("%Y-%m-%d %H:%M:%S")})
+    return result.rowcount or 0
+
+
+class UsageBudgetExceededError(Exception):
+    """The configured monthly search budget is used up. Nothing was spent."""
+
+
+def credits_used_this_month(db: Session) -> int:
+    start = datetime.now(timezone.utc).replace(day=1, hour=0, minute=0, second=0,
+                                               microsecond=0)
+    row = db.execute(text(
+        "SELECT COALESCE(SUM(credits_used), 0) FROM api_usage WHERE timestamp >= :start"
+    ), {"start": start.strftime("%Y-%m-%d %H:%M:%S")}).first()
+    return int(row[0] or 0)
+
+
 class ApiBudgetManager:
     def __init__(self, db: Session, api_key: str):
         self.db = db
@@ -125,6 +153,21 @@ class ApiBudgetManager:
             "usage_id": usage_id
         })
         self.db.commit()
+
+    def _enforce_budget(self) -> None:
+        """Refuse a live search once the optional monthly budget is spent.
+
+        Checked only on a cache miss, so cached responses are always served.
+        """
+        budget = settings.SERPAPI_MONTHLY_BUDGET
+        if not budget:
+            return
+        used = credits_used_this_month(self.db)
+        if used >= budget:
+            raise UsageBudgetExceededError(
+                "The monthly search budget of " + str(budget) + " searches is used up ("
+                + str(used) + " this month). Cached results remain available; raise "
+                "SERPAPI_MONTHLY_BUDGET or wait for next month to search again.")
 
     def _fetch_with_retries(self, params: dict, endpoint: str):
         """(results, error, kind). ``results`` is None when the request failed.
@@ -176,7 +219,8 @@ class ApiBudgetManager:
         if provider == "google_maps": return "maps"
         return "external"
 
-    def execute_search(self, cache_key: str, params: dict, endpoint: str, domain: str = "") -> Optional[dict]:
+    def execute_search(self, cache_key: str, params: dict, endpoint: str, domain: str = "",
+                       ttl_hours: Optional[float] = None) -> Optional[dict]:
         """Response dict on success, or ``None`` when the provider request failed.
 
         ``None`` means "we never got an answer" and is deliberately distinct
@@ -197,6 +241,7 @@ class ApiBudgetManager:
             self._log_budget("CACHE HIT", endpoint, merchant=domain)
             return data
 
+        self._enforce_budget()
         query_str = params.get("q", "")
         usage_id = self._record_usage(endpoint, query_str)
 
@@ -226,7 +271,9 @@ class ApiBudgetManager:
         response_time = time.time() - start_time
         self._update_reservation(usage_id, True, response_time, 1)
         
-        expires_at = datetime.now(timezone.utc) + timedelta(days=CACHE_TTL_DAYS)
+        # Fast-moving sources (news, search interest) pass a shorter lifetime.
+        lifetime = timedelta(hours=ttl_hours) if ttl_hours else timedelta(days=CACHE_TTL_DAYS)
+        expires_at = datetime.now(timezone.utc) + lifetime
         if cached is not None:
             # An expired row still holds this primary key. Inserting a second
             # one raised IntegrityError after the credit had been spent, so

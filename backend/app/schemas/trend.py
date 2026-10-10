@@ -40,6 +40,8 @@ class TrendSeriesModel(BaseModel):
     """
     subject: str
     subject_id: Optional[int] = None
+    # Price series only: the one currency every point in the series shares.
+    currency: Optional[str] = None
     metric: str                       # price | position | rating | reviews | availability
     context: Optional[str] = None     # market / location / merchant this belongs to
 

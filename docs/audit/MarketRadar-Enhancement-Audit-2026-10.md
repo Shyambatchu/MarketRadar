@@ -204,3 +204,45 @@ assets and CSS (`App.css`, `index.css`, `hero.png`, `react.svg`, `vite.svg`,
 3. **Live verification.** Whether a small number of real searches (≈10–20
    credits) may be spent to verify the end-to-end flow after P1/P2. All
    automated tests use mocks.
+
+---
+
+## 8. Implementation status (end of 2026-10-10 session)
+
+Decisions taken where the owner had not answered:
+
+* the monthly budget is **opt-in** (`SERPAPI_MONTHLY_BUDGET`, empty by default), so
+  the earlier "no artificial budget" default still holds;
+* the AI adapter is **Anthropic (Claude)**, enabled only when configured;
+* **no live credits were spent** — every new behaviour is tested with mocked provider responses.
+
+| Area | Status | Where |
+|---|---|---|
+| P0 timeout, retries, error classes, empty-result handling, request bounds, health, error boundary | Done, tested | `api_budget.py`, `routes/validation.py`, `routes/health.py`, `ErrorBoundary.tsx` |
+| Multi-currency price parsing; no unverified currency | Done, tested | `services/money.py`, website provider, Products, Price Intelligence |
+| Price Intelligence persistence (feeds Trends/Pulse/Analyst) | Done, tested | `live_price_service._persist` |
+| Price change detection (increase, decrease, new, not observed, outlier, dispersion, conflict) | Done, tested | `price_change_service.py`, `GET /api/prices/alerts`, Price Intelligence page |
+| Competitor review (confirm/reject/rename), audit log, rejected skipped by Products | Done, tested | `PATCH /api/competitors/{id}`, `audit_events`, Competitors page |
+| CSV exports | Done, tested | `routes/export.py`, ExportButton on every list |
+| Google Trends (interest over time, by region, related queries) | Done, tested (mocked) | `search_interest_service.py`, Market Signals page |
+| Google News | Done, tested (mocked) | `news_service.py`, Market Signals page |
+| Related questions / searches (free, same response) | Done, tested | Market Research |
+| Usage breakdown, cost estimate with source/date, opt-in budget | Done, tested | `usage_service.py`, Usage & Cost page |
+| Anthropic adapter + evidence-grounded Q&A with validation and deterministic fallback | Done, tested (fake client) | `anthropic_provider.py`, `analyst_qa_service.py`, AI Analyst page |
+| Opportunity scoring (explicit formula, missing-data handling, review statuses) | Done, tested | `opportunity_service.py`, Opportunities page |
+| Reports (frozen snapshot, print-ready HTML → PDF) and saved searches | Done, tested | `report_service.py`, Reports page |
+| Executive dashboard with filters, changes, opportunities, freshness, health | Done, tested | `GET /api/dashboard`, Dashboard page |
+| Cache retention (expired rows pruned after 30 days) | Done, tested | `prune_expired_cache` |
+| JSON 500 with CORS headers (UI no longer says "unreachable" on a server error) | Done, tested | `main.py` middleware |
+| Frontend test suite | Done (22 tests) | Vitest + Testing Library |
+| Dependency change | FastAPI 0.104 → 0.115 and httpx 0.23 → 0.28 (anyio 4 required by the Anthropic SDK); `npm audit` clean | `requirements*.txt`, `package-lock.json` |
+
+**Verification run:** backend `pytest` 653 passed; frontend `npm test` 22 passed,
+`npm run lint` clean, `npm run build` succeeded; browser pass on a copy of the demo
+database (all 12 pages render with no console errors and no horizontal overflow at
+375 px; opportunity refresh/save, report generation and render, and competitor review
+exercised in the UI).
+
+**Still open:** authentication; Alembic/PostgreSQL; scheduled re-collection; GTIN-based
+matching; a live end-to-end check against SerpApi and the Anthropic API (needs the owner's
+approval to spend credits).

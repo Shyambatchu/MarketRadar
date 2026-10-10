@@ -1,15 +1,21 @@
 import React, { useRef, useState } from 'react';
-import { 
+import { useSearchParams } from 'react-router-dom';
+import {
   Box, Typography, TextField, Button, Grid, Paper, Alert,
-  CircularProgress, Table, Tooltip, IconButton, TableBody, TableCell, TableContainer,
+  CircularProgress, Table, Tooltip, TableBody, TableCell, TableContainer,
   TableHead, TableRow, MenuItem
 } from '@mui/material';
 import { isAxiosError } from 'axios';
 import SearchIcon from '@mui/icons-material/Search';
 import InfoOutlinedIcon from '@mui/icons-material/InfoOutlined';
+import BookmarkAddOutlinedIcon from '@mui/icons-material/BookmarkAddOutlined';
+import HistoryIcon from '@mui/icons-material/History';
 import PageHeader from '../../components/PageHeader/PageHeader';
 import { searchLocalPrices } from '../../services/priceApi';
-import type { LocalPriceSearchResponse } from '../../services/priceApi';
+import type { LocalPriceSearchResponse, NearbyMerchantStatus } from '../../services/priceApi';
+import { saveSearch } from '../../services/intelligenceApi';
+import { errorMessage as sharedErrorMessage, formatMoney } from '../../utils/format';
+import PriceChanges from './PriceChanges';
 
 const RADIUS_OPTIONS = [5, 10, 15, 25];
 const MAX_RADIUS = RADIUS_OPTIONS[RADIUS_OPTIONS.length - 1];
@@ -26,22 +32,38 @@ const errorMessage = (err: unknown): string => {
     const detail = err.response?.data?.detail;
     if (typeof detail === 'string' && detail) return detail;
     const status = err.response?.status;
-    if (status === 502) return 'The search provider failed to respond. Try again in a moment.';
+    if (status === 502) return 'The search provider failed to respond, so no prices could be compared. This is not the same as finding none.';
     if (status === 503) return 'Live market data is not configured (missing SerpApi key).';
     if (!err.response) return 'The MarketRadar server could not be reached.';
   }
-  return 'An error occurred fetching local prices.';
+  return sharedErrorMessage(err, 'An error occurred fetching local prices.');
+};
+
+/**
+ * The backend may attach a currency to a merchant row; the shared type does
+ * not declare it yet, so it is read defensively.
+ */
+const merchantCurrency = (m: NearbyMerchantStatus, fallback: string | null): string | null => {
+  const value = m.currency;
+  return value ?? fallback;
 };
 
 const PriceIntelligence = () => {
-  const [product, setProduct] = useState('');
-  const [area, setArea] = useState('');
+  const [searchParams] = useSearchParams();
+  // Links from other pages prefill the form; nothing runs (or spends a
+  // credit) until the user presses Compare.
+  const [product, setProduct] = useState(() => searchParams.get('product') ?? '');
+  const [area, setArea] = useState(() => searchParams.get('area') ?? '');
   const [radius, setRadius] = useState(25);
   const [referenceStore, setReferenceStore] = useState('');
   
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<LocalPriceSearchResponse | null>(null);
+  // Bumped after a search so "Price changes" reloads with the new evidence.
+  const [alertsRefresh, setAlertsRefresh] = useState(0);
+  const [saveState, setSaveState] = useState<{ saving: boolean; message: string | null; error: boolean }>(
+    { saving: false, message: null, error: false });
 
   // Only the newest request may render. Comparing against the live form
   // fields instead would blank out results as soon as the user edits an
@@ -57,11 +79,13 @@ const PriceIntelligence = () => {
     setLoading(true);
     setError(null);
     setData(null);
+    setSaveState({ saving: false, message: null, error: false });
 
     try {
-      const response = await searchLocalPrices(product, area, searchRadius, referenceStore.trim() || undefined);
+      const response = await searchLocalPrices(product.trim(), area.trim(), searchRadius, referenceStore.trim() || undefined);
       if (requestId !== requestIdRef.current) return;
       setData(response);
+      if (response.persisted_observations > 0) setAlertsRefresh((n) => n + 1);
     } catch (err) {
       if (requestId !== requestIdRef.current) return;
       setError(errorMessage(err));
@@ -69,6 +93,41 @@ const PriceIntelligence = () => {
       if (requestId === requestIdRef.current) setLoading(false);
     }
   };
+
+  const handleSaveSearch = async () => {
+    if (!data) return;
+    setSaveState({ saving: true, message: null, error: false });
+    try {
+      const res = await saveSearch({
+        module: 'prices', query: data.searched_product, location: data.searched_area || undefined,
+      });
+      setSaveState({
+        saving: false, error: false,
+        message: res.created ? 'Search saved.' : 'This search was already saved.',
+      });
+    } catch (err) {
+      setSaveState({ saving: false, error: true, message: sharedErrorMessage(err, 'The search could not be saved.') });
+    }
+  };
+
+  // Statistics need two or more distinct prices in a single currency.
+  const distinctPrices = data
+    ? new Set(data.verified_price_observations
+      .filter((o) => o.price !== null)
+      .map((o) => `${o.price}|${o.currency ?? ''}`)).size
+    : 0;
+  const singleObservation = data?.verified_price_observations.find((o) => o.price !== null) ?? null;
+  const showStatistics = !!data && !data.mixed_currency_statistics
+    && data.verified_local_prices >= MIN_PRICES_FOR_STATISTICS
+    && distinctPrices >= MIN_PRICES_FOR_STATISTICS;
+  const referenceCurrency = data?.reference_store
+    ? merchantCurrency(data.reference_store, data.currency) : null;
+  const hasReferencePrice = data?.reference_price !== null && data?.reference_price !== undefined;
+  // A difference is only meaningful when both prices share a currency.
+  const referenceDelta = data && hasReferencePrice && data.lowest_price !== null
+    && !data.mixed_currency_statistics
+    && (referenceCurrency === null || data.currency === null || referenceCurrency === data.currency)
+    ? data.lowest_price - (data.reference_price as number) : null;
 
   const REASON_LABELS: Record<string, string> = {
     price_not_product_specific: 'The only price found was on a category or brand listing page, so it cannot be tied to this exact product.',
@@ -175,10 +234,30 @@ const PriceIntelligence = () => {
 
       {data && (
         <Box sx={{ mt: 4 }}>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-            Results for <strong>{data.searched_product}</strong> within {data.searched_radius} miles
-            of <strong>{data.search_center?.name || data.searched_area}</strong>.
-          </Typography>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'center', flexWrap: 'wrap', mb: 2 }}>
+            <Typography variant="body2" color="text.secondary" sx={{ flexGrow: 1 }}>
+              Results for <strong>{data.searched_product}</strong> within {data.searched_radius} miles
+              of <strong>{data.search_center?.name || data.searched_area}</strong>.
+            </Typography>
+            <Button size="small" onClick={handleSaveSearch} disabled={saveState.saving}
+                    startIcon={saveState.saving
+                      ? <CircularProgress size={16} /> : <BookmarkAddOutlinedIcon />}>
+              Save search
+            </Button>
+            {saveState.message && (
+              <Typography variant="caption" color={saveState.error ? 'error' : 'success.main'}>
+                {saveState.message}
+              </Typography>
+            )}
+          </Box>
+          <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-start', mb: 2 }}>
+            <HistoryIcon fontSize="small" color="action" sx={{ mt: '2px' }} />
+            <Typography variant="caption" color="text.secondary">
+              {data.persisted_observations > 0
+                ? `${data.persisted_observations} observation${data.persisted_observations === 1 ? '' : 's'} saved to history — they now feed Trends, Market Pulse and Price changes.`
+                : 'Nothing was saved to history: this search found no product or price evidence worth recording.'}
+            </Typography>
+          </Box>
           {data.stages.filter((s) => s.status === 'error' || s.status === 'degraded').map((s) => (
             <Alert key={s.stage} severity={s.status === 'error' ? 'error' : 'warning'} sx={{ mb: 2 }}>
               <strong>{STAGE_LABELS[s.stage] || s.stage}</strong>{' '}
@@ -196,6 +275,14 @@ const PriceIntelligence = () => {
             </Alert>
           )}
 
+          {data.mixed_currency_statistics && data.verified_local_prices > 0 && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              Verified prices were found in more than one currency, so no lowest, average
+              or highest price was computed — they cannot be compared directly. Each
+              price is listed below with its own currency.
+            </Alert>
+          )}
+
           {data.verified_local_prices > 0 && (
             <Grid container spacing={3} sx={{ mb: 4 }}>
               {data.reference_store && (
@@ -204,18 +291,24 @@ const PriceIntelligence = () => {
                     <Typography variant="subtitle2" sx={{ opacity: 0.8, mb: 1 }}>
                       Reference Store ({data.reference_store.merchant}) Price:
                     </Typography>
-                    {data.reference_price && data.lowest_price !== null ? (
+                    {hasReferencePrice ? (
                       <>
                         <Typography variant="h4" sx={{ mb: 1 }}>
-                          ${data.reference_price.toFixed(2)}
+                          {formatMoney(data.reference_price, referenceCurrency)}
                         </Typography>
-                        <Typography variant="body1" sx={{
-                          color: data.lowest_price < data.reference_price ? 'warning.main' : 'success.main',
-                          fontWeight: 'bold'
-                        }}>
-                          Lowest other store vs. reference: {(data.lowest_price - data.reference_price) > 0 ? '+' : ''}
-                          ${(data.lowest_price - data.reference_price).toFixed(2)}
-                        </Typography>
+                        {referenceDelta !== null && showStatistics ? (
+                          <Typography variant="body1" sx={{
+                            color: referenceDelta < 0 ? 'warning.main' : 'success.main',
+                            fontWeight: 'bold'
+                          }}>
+                            Lowest other store vs. reference: {referenceDelta > 0 ? '+' : ''}
+                            {formatMoney(referenceDelta, data.currency ?? referenceCurrency)}
+                          </Typography>
+                        ) : (
+                          <Typography variant="body2" color="text.secondary">
+                            No comparison: too few comparable prices in one currency.
+                          </Typography>
+                        )}
                       </>
                     ) : (
                       <Typography variant="h6" sx={{ opacity: 0.9 }}>
@@ -227,28 +320,49 @@ const PriceIntelligence = () => {
               )}
               <Grid size={{xs: 12, md: data.reference_store ? 6 : 12}}>
                 <Box sx={{ bgcolor: 'primary.dark', p: 3, borderRadius: 2, color: 'white' }}>
-                  {new Set(data.verified_price_observations.map((o) => o.price)).size >= MIN_PRICES_FOR_STATISTICS ? (
+                  {showStatistics ? (
                     <>
                       <Typography variant="subtitle2" sx={{ opacity: 0.8, mb: 1 }}>
                         Lowest Verified Nearby Competitor:
                       </Typography>
                       <Typography variant="h4" sx={{ mb: 1 }}>
-                        ${data.lowest_price?.toFixed(2) || '---'}
+                        {formatMoney(data.lowest_price, data.currency)}
                       </Typography>
                       <Typography variant="body1">
-                        Average: ${data.average_price?.toFixed(2) || '---'} | Highest: ${data.highest_price?.toFixed(2) || '---'}
+                        Average: {formatMoney(data.average_price, data.currency)} | Highest: {formatMoney(data.highest_price, data.currency)}
+                      </Typography>
+                      <Typography variant="caption" sx={{ opacity: 0.8 }}>
+                        From {data.verified_local_prices} verified prices.
+                      </Typography>
+                    </>
+                  ) : data.mixed_currency_statistics ? (
+                    <>
+                      <Typography variant="subtitle2" sx={{ opacity: 0.8, mb: 1 }}>
+                        {data.verified_local_prices} verified prices in several currencies
+                      </Typography>
+                      <Typography variant="body2" sx={{ opacity: 0.9 }}>
+                        No statistics were computed. See each price in the table below.
                       </Typography>
                     </>
                   ) : (
                     <>
                       <Typography variant="subtitle2" sx={{ opacity: 0.8, mb: 1 }}>
-                        One distinct verified price:
+                        {distinctPrices <= 1 && data.verified_local_prices > 1
+                          ? `One distinct verified price (seen ${data.verified_local_prices} times):`
+                          : 'One verified price:'}
                       </Typography>
                       <Typography variant="h4" sx={{ mb: 1 }}>
-                        ${data.lowest_price?.toFixed(2) || '---'}
+                        {singleObservation
+                          ? formatMoney(singleObservation.price, singleObservation.currency)
+                          : formatMoney(data.lowest_price, data.currency)}
                       </Typography>
+                      {singleObservation && (
+                        <Typography variant="body2" sx={{ opacity: 0.9, mb: 0.5 }}>
+                          at {singleObservation.merchant}
+                        </Typography>
+                      )}
                       <Typography variant="body2" sx={{ opacity: 0.9 }}>
-                        Too few verified prices to state a lowest, average or highest.
+                        One price is not a range, so no lowest, average or highest is stated.
                       </Typography>
                     </>
                   )}
@@ -297,7 +411,7 @@ const PriceIntelligence = () => {
           {data.verified_local_prices > 0 && (
             <Box sx={{ mb: 6 }}>
               <Typography variant="h6" sx={{ mb: 2 }}>Verified Price Comparison</Typography>
-              <TableContainer component={Paper}>
+              <TableContainer component={Paper} sx={{ overflowX: 'auto' }}>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
@@ -316,8 +430,17 @@ const PriceIntelligence = () => {
                         <TableCell><Typography variant="subtitle2">{obs.merchant}</Typography></TableCell>
                         <TableCell>{formatMiles(obs.distance)}</TableCell>
                         <TableCell>{obs.product_name}</TableCell>
-                        <TableCell>{obs.size || '---'}</TableCell>
-                        <TableCell align="right"><Typography variant="body2" sx={{ fontWeight: 'bold' }}>${obs.price?.toFixed(2)}</Typography></TableCell>
+                        <TableCell>{obs.size || '—'}</TableCell>
+                        <TableCell align="right">
+                          <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
+                            {formatMoney(obs.price, obs.currency)}
+                          </Typography>
+                          {!obs.currency && obs.price !== null && (
+                            <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                              currency not stated
+                            </Typography>
+                          )}
+                        </TableCell>
                         <TableCell>
                           {obs.source_type === 'merchant_website_indexed' ? 'Merchant website' : 
                            obs.source_type === 'google_shopping' ? 'Google Shopping' : 
@@ -347,7 +470,7 @@ const PriceIntelligence = () => {
           {data.nearby_merchants_discovered > 0 && (
             <Box sx={{ mb: 6 }}>
               <Typography variant="h6" sx={{ mb: 2 }}>Nearby Physical Stores ({data.nearby_merchants_discovered})</Typography>
-              <TableContainer component={Paper}>
+              <TableContainer component={Paper} sx={{ overflowX: 'auto' }}>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
@@ -373,7 +496,7 @@ const PriceIntelligence = () => {
                         <TableCell align="right">
                           {merchant.price_status === 'verified' ? (
                             <Typography variant="body2" color="success.main" sx={{ fontWeight: 'bold' }}>
-                              ${merchant.price?.toFixed(2)}
+                              {formatMoney(merchant.price, merchantCurrency(merchant, data.currency))}
                             </Typography>
                           ) : (
                             <Typography variant="body2" color="text.secondary">—</Typography>
@@ -403,9 +526,11 @@ const PriceIntelligence = () => {
                                   )}
                                 </React.Fragment>
                               } arrow placement="top">
-                                <IconButton size="small" sx={{ ml: 0.5, p: 0 }}>
-                                  <InfoOutlinedIcon fontSize="inherit" color="action" />
-                                </IconButton>
+                                <InfoOutlinedIcon
+                                  fontSize="small" color="action" tabIndex={0}
+                                  aria-label="Why this price could not be verified"
+                                  sx={{ ml: 0.5, fontSize: '1rem', cursor: 'help' }}
+                                />
                               </Tooltip>
                             )}
                           </Box>
@@ -420,6 +545,8 @@ const PriceIntelligence = () => {
 
         </Box>
       )}
+
+      <PriceChanges product={data?.searched_product ?? null} refreshKey={alertsRefresh} />
     </Box>
   );
 };

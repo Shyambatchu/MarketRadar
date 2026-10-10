@@ -53,3 +53,46 @@ export interface AnalystResponse {
 
   detail: string | null;
 }
+
+/** One numbered evidence item an answer may cite as [F#]. */
+export interface EvidenceItem {
+  id: string;
+  /** observation | limitation | insufficient_evidence | price_alert | news */
+  kind: string;
+  section: string;
+  statement: string;
+  source_urls: string[];
+  observed_at: string | null;
+  record_ids: number[];
+}
+
+export interface CitedStatement {
+  statement: string;
+  citations: string[];
+}
+
+/**
+ * An answer built only from numbered evidence. `mode` is "assisted" when an AI
+ * provider wrote it and it passed validation, otherwise "deterministic": the
+ * evidence most relevant to the question, with no prose added.
+ */
+export interface AnalystAnswer {
+  generated_at: string;
+  question: string;
+  context: MarketContext;
+  mode: 'assisted' | 'deterministic';
+  provider_configured: boolean;
+  provider_name: string | null;
+  answer: string | null;
+  facts: CitedStatement[];
+  interpretations: CitedStatement[];
+  hypotheses: CitedStatement[];
+  missing_data: string[];
+  confidence: 'high' | 'medium' | 'low' | null;
+  relevant_evidence: string[];
+  evidence: EvidenceItem[];
+  answer_rejected: boolean;
+  rejection_reason: string | null;
+  provider_error: string | null;
+  detail: string | null;
+}

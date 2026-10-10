@@ -1,9 +1,11 @@
 import { useState, useEffect, Fragment } from 'react';
 import {
-  Alert, Box, Chip, CircularProgress, Collapse, Grid, IconButton, Paper, Table, TableBody,
-  TableCell, TableContainer, TableHead, TableRow, Tab, Tabs, Tooltip,
-  Typography,
+  Alert, Autocomplete, Box, Button, Chip, CircularProgress, Collapse, Grid, IconButton,
+  InputAdornment, LinearProgress, MenuItem, Paper, Table, TableBody, TableCell,
+  TableContainer, TableHead, TableRow, Tab, Tabs, TextField, Tooltip, Typography,
 } from '@mui/material';
+import SearchIcon from '@mui/icons-material/Search';
+import ClearIcon from '@mui/icons-material/Clear';
 import TrendingUpOutlinedIcon from '@mui/icons-material/TrendingUpOutlined';
 import ArrowUpwardIcon from '@mui/icons-material/ArrowUpward';
 import ArrowDownwardIcon from '@mui/icons-material/ArrowDownward';
@@ -12,19 +14,44 @@ import SwapVertIcon from '@mui/icons-material/SwapVert';
 import HelpOutlineIcon from '@mui/icons-material/HelpOutlineOutlined';
 import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
-import { isAxiosError } from 'axios';
 
 import PageHeader from '../../components/PageHeader/PageHeader';
 import EmptyState from '../../components/EmptyState/EmptyState';
+import ExportButton from '../../components/ExportButton/ExportButton';
 import TrendChart, { Sparkline } from '../../components/TrendChart/TrendChart';
 import {
   getAvailabilityTrends, getMerchantPresence, getPriceTrends,
   getTrendSummary, getVisibilityTrends,
 } from '../../services/trendApi';
+import { getMarketPulseOptions } from '../../services/marketPulseApi';
+import { exportUrl } from '../../services/intelligenceApi';
 import type {
   MerchantPresenceResponse, TrendListResponse, TrendSeries,
   TrendSummaryResponse,
 } from '../../types/trend';
+import type { MarketOption } from '../../types/marketPulse';
+import { errorMessage, formatDateTime, formatMoney, isCanceled } from '../../utils/format';
+
+type VisibilityMetric = 'position' | 'rating' | 'reviews';
+
+const VISIBILITY_METRICS: { value: VisibilityMetric; label: string; help: string }[] = [
+  { value: 'position', label: 'Search position', help: 'Rank in search results — lower is better.' },
+  { value: 'rating', label: 'Rating', help: 'Average star rating reported by the provider.' },
+  { value: 'reviews', label: 'Review count', help: 'Number of reviews reported by the provider.' },
+];
+
+const SIGNALS = ['prices', 'availability', 'visibility'] as const;
+
+const optionLabel = (o: MarketOption): string =>
+  `${o.market ?? 'Any market'} — ${o.location ?? 'any location'}`;
+
+/**
+ * Price series carry the one currency all their points share. The shared type
+ * does not declare it yet, so it is read defensively; without it the bare
+ * number is shown rather than an assumed "$".
+ */
+const seriesCurrency = (series: TrendSeries): string | null =>
+  series.currency ?? null;
 
 /**
  * A direction is only ever shown when two distinct measurements exist.
@@ -61,15 +88,9 @@ const STATUS_HELP: Record<string, string> = {
   no_data: 'Nothing recorded for this metric.',
 };
 
-const formatDateTime = (value: string | null): string =>
-  value ? new Date(value).toLocaleString(undefined, {
-    year: 'numeric', month: 'short', day: 'numeric',
-    hour: '2-digit', minute: '2-digit',
-  }) : '—';
-
 const formatValue = (series: TrendSeries, value: number | null): string => {
   if (value === null) return '—';
-  if (series.metric === 'price') return `$${value.toFixed(2)}`;
+  if (series.metric === 'price') return formatMoney(value, seriesCurrency(series));
   if (series.metric === 'availability') {
     return { 1: 'found', 0: 'unknown', '-1': 'not found' }[String(value)] ?? String(value);
   }
@@ -80,7 +101,7 @@ const formatValue = (series: TrendSeries, value: number | null): string => {
 const formatChange = (s: TrendSeries): string | null => {
   if (s.status !== 'trend' || s.change_absolute === null) return null;
   const sign = s.change_absolute > 0 ? '+' : '';
-  const abs = s.metric === 'price' ? `$${s.change_absolute.toFixed(2)}` : String(s.change_absolute);
+  const abs = s.metric === 'price' ? formatMoney(s.change_absolute, seriesCurrency(s)) : String(s.change_absolute);
   const pct = s.change_percent !== null ? ` (${s.change_percent > 0 ? '+' : ''}${s.change_percent}%)` : '';
   return `${sign}${abs}${pct}`;
 };
@@ -125,21 +146,34 @@ const Movements = ({ series }: { series: TrendSeries[] }) => {
   );
 };
 
-const SeriesTable = ({ data, loading }: { data: TrendListResponse | null; loading: boolean }) => {
+interface SeriesTableProps {
+  data: TrendListResponse | null;
+  loading: boolean;
+  error: string | null;
+  filtered: boolean;
+}
+
+const SeriesTable = ({ data, loading, error, filtered }: SeriesTableProps) => {
   const [open, setOpen] = useState<number | null>(null);
   if (loading) {
     return <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>;
   }
   if (!data) {
     // A failed load is not an empty history.
-    return <Alert severity="warning">This signal could not be loaded, so nothing can be said about it.</Alert>;
+    return (
+      <Alert severity="warning">
+        This signal could not be loaded, so nothing can be said about it.{error ? ` ${error}` : ''}
+      </Alert>
+    );
   }
   if (data.series.length === 0) {
     return (
       <EmptyState
-        title="Nothing recorded for this signal yet"
-        description={data?.detail
-          ?? 'Run Competitors or Products searches to begin building observation history.'}
+        title={filtered ? 'Nothing recorded for these filters' : 'Nothing recorded for this signal yet'}
+        description={data.detail
+          ?? (filtered
+            ? 'Widen the market, location or product filter to see other recorded history.'
+            : 'Run Competitors or Products searches to begin building observation history.')}
         icon={<TrendingUpOutlinedIcon sx={{ fontSize: 48, color: 'text.disabled' }} />}
       />
     );
@@ -151,7 +185,7 @@ const SeriesTable = ({ data, loading }: { data: TrendListResponse | null; loadin
         <Alert severity="info" sx={{ mb: 2 }}>{data.detail}</Alert>
       )}
       <Movements series={data.series} />
-      <TableContainer component={Paper}>
+      <TableContainer component={Paper} sx={{ overflowX: 'auto' }}>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -198,7 +232,7 @@ const SeriesTable = ({ data, loading }: { data: TrendListResponse | null; loadin
                     <Typography variant="body2">
                       {s.change_absolute > 0 ? '+' : ''}
                       {s.metric === 'price'
-                        ? `$${s.change_absolute.toFixed(2)}`
+                        ? formatMoney(s.change_absolute, seriesCurrency(s))
                         : s.change_absolute}
                       {s.change_percent !== null && (
                         <Typography component="span" variant="caption" color="text.secondary">
@@ -254,10 +288,24 @@ const SeriesTable = ({ data, loading }: { data: TrendListResponse | null; loadin
   );
 };
 
+type SignalKey = 'summary' | 'prices' | 'availability' | 'visibility' | 'presence';
+
+const SIGNAL_LABEL: Record<SignalKey, string> = {
+  summary: 'summary',
+  prices: 'prices',
+  availability: 'availability',
+  visibility: 'visibility',
+  presence: 'merchant presence',
+};
+
 const Trends = () => {
   const [tab, setTab] = useState(0);
+  // `loading` is the first load (full-page spinner); `refreshing` is a
+  // re-fetch after a filter change (tables show their own spinner).
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [signalErrors, setSignalErrors] = useState<Partial<Record<SignalKey, string>>>({});
 
   const [summary, setSummary] = useState<TrendSummaryResponse | null>(null);
   const [prices, setPrices] = useState<TrendListResponse | null>(null);
@@ -265,45 +313,103 @@ const Trends = () => {
   const [visibility, setVisibility] = useState<TrendListResponse | null>(null);
   const [presence, setPresence] = useState<MerchantPresenceResponse | null>(null);
 
+  // Filters. Scope choices come from observed history (Market Pulse options),
+  // so a selection always refers to something actually recorded.
+  const [options, setOptions] = useState<MarketOption[]>([]);
+  const [optionsLoading, setOptionsLoading] = useState(true);
+  const [optionsError, setOptionsError] = useState<string | null>(null);
+  const [scope, setScope] = useState<MarketOption | null>(null);
+  const [productInput, setProductInput] = useState('');
+  const [appliedQ, setAppliedQ] = useState('');
+  const [metric, setMetric] = useState<VisibilityMetric>('position');
+
+  const market = scope?.market ?? undefined;
+  const location = scope?.location ?? undefined;
+  const q = appliedQ || undefined;
+  const filtered = !!scope || !!appliedQ;
+
+  useEffect(() => {
+    const controller = new AbortController();
+    getMarketPulseOptions(controller.signal)
+      .then((res) => setOptions(res.options))
+      .catch((err) => {
+        if (!isCanceled(err)) {
+          setOptionsError(errorMessage(err, 'Observed markets could not be loaded, so the market filter is unavailable.'));
+        }
+      })
+      .finally(() => { if (!controller.signal.aborted) setOptionsLoading(false); });
+    return () => controller.abort();
+  }, []);
+
+  // Typing applies after a pause; Enter or the button applies at once.
+  useEffect(() => {
+    const handle = window.setTimeout(() => setAppliedQ(productInput.trim()), 600);
+    return () => window.clearTimeout(handle);
+  }, [productInput]);
+
   // Everything here is a database read — no provider request, no credit.
   useEffect(() => {
     const controller = new AbortController();
     const load = async () => {
+      setRefreshing(true);
       // Settled independently: one failing signal must not blank the others.
       const results = await Promise.allSettled([
         getTrendSummary(controller.signal),
-        getPriceTrends({}, controller.signal),
-        getAvailabilityTrends({}, controller.signal),
-        getVisibilityTrends({ metric: 'position' }, controller.signal),
-        getMerchantPresence({}, controller.signal),
+        getPriceTrends({ q, market, location }, controller.signal),
+        getAvailabilityTrends({ q, market, location }, controller.signal),
+        getVisibilityTrends({ market, location, metric }, controller.signal),
+        getMerchantPresence({ market, location }, controller.signal),
       ]);
-      // An aborted (StrictMode / unmounted) load must not touch state, or it
-      // briefly reports "no history" while the real request is in flight.
+      // An aborted (StrictMode / unmounted / superseded) load must not touch
+      // state, or it briefly reports "no history" while the real request runs.
       if (controller.signal.aborted) return;
 
       const [s, p, a, v, m] = results;
-      if (s.status === 'fulfilled') setSummary(s.value);
-      if (p.status === 'fulfilled') setPrices(p.value);
-      if (a.status === 'fulfilled') setAvailability(a.value);
-      if (v.status === 'fulfilled') setVisibility(v.value);
-      if (m.status === 'fulfilled') setPresence(m.value);
+      // A failed signal is cleared rather than left showing data for
+      // different filters.
+      setSummary(s.status === 'fulfilled' ? s.value : null);
+      setPrices(p.status === 'fulfilled' ? p.value : null);
+      setAvailability(a.status === 'fulfilled' ? a.value : null);
+      setVisibility(v.status === 'fulfilled' ? v.value : null);
+      setPresence(m.status === 'fulfilled' ? m.value : null);
 
-      const failed = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[];
+      const keys: SignalKey[] = ['summary', 'prices', 'availability', 'visibility', 'presence'];
+      const errs: Partial<Record<SignalKey, string>> = {};
+      results.forEach((r, i) => {
+        if (r.status === 'rejected') errs[keys[i]] = errorMessage(r.reason, 'Could not be loaded.');
+      });
+      setSignalErrors(errs);
+
+      const failed = keys.filter((k) => errs[k]);
       if (failed.length) {
-        const first = failed[0].reason;
-        const detail = isAxiosError(first) ? first.response?.data?.detail : null;
+        const first = errs[failed[0]];
         setError(
           (failed.length === results.length
             ? 'Trend data could not be loaded.'
-            : `${failed.length} of ${results.length} trend signals could not be loaded.`)
-          + (typeof detail === 'string' ? ` ${detail}`
-            : isAxiosError(first) && !first.response ? ' Is the backend running?' : ''));
+            : `Could not load: ${failed.map((k) => SIGNAL_LABEL[k]).join(', ')}.`)
+          + (first ? ` ${first}` : ''));
+      } else {
+        setError(null);
       }
       setLoading(false);
+      setRefreshing(false);
     };
     load();
     return () => controller.abort();
-  }, []);
+  }, [q, market, location, metric]);
+
+  const applyProduct = () => setAppliedQ(productInput.trim());
+  const clearFilters = () => { setScope(null); setProductInput(''); setAppliedQ(''); };
+
+  const activeSignal = tab <= 2 ? SIGNALS[tab] : null;
+  const exportHref = activeSignal
+    ? exportUrl('trends', {
+      signal: activeSignal,
+      q: activeSignal === 'visibility' ? undefined : q,
+      market, location,
+      metric: activeSignal === 'visibility' ? metric : undefined,
+    })
+    : '';
 
   const noHistory = summary
     && summary.competitor_observations === 0
@@ -314,13 +420,90 @@ const Trends = () => {
       <PageHeader
         title="Trends"
         subtitle="Change over time, derived from observations already recorded by Competitors and Products."
+        action={activeSignal ? (
+          <ExportButton href={exportHref} label={`Export ${activeSignal}`}
+                        disabled={loading || refreshing}
+          />
+        ) : undefined}
       />
+
+      <Paper sx={{ p: 2, mb: 3 }}>
+        <Grid container spacing={2} sx={{ alignItems: 'center' }}>
+          <Grid size={{ xs: 12, md: 6 }}>
+            <Autocomplete
+              size="small"
+              options={options}
+              value={scope}
+              onChange={(_, v) => setScope(v)}
+              getOptionLabel={optionLabel}
+              isOptionEqualToValue={(a, b) => a.market === b.market && a.location === b.location}
+              loading={optionsLoading}
+              disabled={!!optionsError}
+              renderInput={(params) => (
+                <TextField {...params} label="Market and location"
+                           placeholder={optionsLoading ? 'Loading observed markets…' : 'All markets and locations'}
+                           helperText={scope ? undefined : 'All recorded markets and locations'} />
+              )}
+              renderOption={(props, o) => (
+                <li {...props} key={`${o.market}-${o.location}`}>
+                  <Box>
+                    <Typography variant="body2">{o.market ?? 'Any market'}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {o.location ?? 'any location'} · {o.merchants} merchant(s) ·{' '}
+                      {o.product_observations} product observation(s)
+                    </Typography>
+                  </Box>
+                </li>
+              )}
+              noOptionsText="No markets have been observed yet."
+            />
+          </Grid>
+          <Grid size={{ xs: 12, md: 4 }}>
+            <TextField
+              fullWidth size="small" label="Product"
+              placeholder="Filter prices and availability"
+              helperText="Applies to prices and availability"
+              value={productInput}
+              onChange={(e) => setProductInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') applyProduct(); }}
+              slotProps={{
+                input: {
+                  endAdornment: (
+                    <InputAdornment position="end">
+                      <IconButton size="small" aria-label="Apply product filter" onClick={applyProduct}>
+                        <SearchIcon fontSize="small" />
+                      </IconButton>
+                    </InputAdornment>
+                  ),
+                },
+              }}
+            />
+          </Grid>
+          <Grid size={{ xs: 12, md: 2 }}>
+            <Button fullWidth size="small" startIcon={<ClearIcon />} onClick={clearFilters}
+                    disabled={!filtered && !productInput}>
+              Clear filters
+            </Button>
+          </Grid>
+        </Grid>
+        {optionsError && (
+          <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
+            {optionsError}
+          </Typography>
+        )}
+        {refreshing && !loading && <LinearProgress sx={{ mt: 2 }} />}
+      </Paper>
 
       {error && <Alert severity="error" sx={{ mb: 3 }}>{error}</Alert>}
 
       {summary && (
         <>
           <Paper variant="outlined" elevation={0} sx={{ p: 2, mb: 3 }}>
+            {filtered && (
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
+                These totals cover all recorded history; the filters apply to the tabs below.
+              </Typography>
+            )}
             <Grid container spacing={2}>
               {[
                 ['Competitor observations', summary.competitor_observations],
@@ -353,7 +536,7 @@ const Trends = () => {
 
       {loading ? (
         <Box sx={{ p: 6, textAlign: 'center' }}><CircularProgress /></Box>
-      ) : !summary && error ? null : noHistory ? (
+      ) : !summary && !prices && !availability && !visibility && !presence && error ? null : noHistory ? (
         <EmptyState
           title="No observation history yet"
           description="Trends are derived from what Competitors and Products have already recorded. Run a search in either module to begin building history — Trends itself makes no external requests."
@@ -362,7 +545,7 @@ const Trends = () => {
       ) : (
         <>
           <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 3 }}>
-            <Tabs value={tab} onChange={(_, v) => setTab(v)}>
+            <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" allowScrollButtonsMobile>
               <Tab label={`Prices (${prices?.total ?? 0})`} />
               <Tab label={`Availability (${availability?.total ?? 0})`} />
               <Tab label={`Visibility (${visibility?.total ?? 0})`} />
@@ -371,15 +554,45 @@ const Trends = () => {
             </Tabs>
           </Box>
 
-          {tab === 0 && <SeriesTable data={prices} loading={false} />}
-          {tab === 1 && <SeriesTable data={availability} loading={false} />}
-          {tab === 2 && <SeriesTable data={visibility} loading={false} />}
+          {tab === 0 && (
+            <SeriesTable data={prices} loading={refreshing} error={signalErrors.prices ?? null}
+                         filtered={filtered} />
+          )}
+          {tab === 1 && (
+            <SeriesTable data={availability} loading={refreshing}
+                         error={signalErrors.availability ?? null} filtered={filtered} />
+          )}
+          {tab === 2 && (
+            <>
+              <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap', mb: 2 }}>
+                <TextField
+                  select size="small" label="Visibility metric" value={metric}
+                  onChange={(e) => setMetric(e.target.value as VisibilityMetric)}
+                  sx={{ minWidth: 200 }}
+                >
+                  {VISIBILITY_METRICS.map((m) => (
+                    <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>
+                  ))}
+                </TextField>
+                <Typography variant="caption" color="text.secondary">
+                  {VISIBILITY_METRICS.find((m) => m.value === metric)?.help}
+                  {appliedQ ? ' The product filter does not apply to visibility.' : ''}
+                </Typography>
+              </Box>
+              <SeriesTable data={visibility} loading={refreshing}
+                           error={signalErrors.visibility ?? null} filtered={!!scope} />
+            </>
+          )}
 
           {tab === 3 && (
-            !presence ? (
-              <Alert severity="warning">Merchant presence could not be loaded.</Alert>
+            refreshing ? (
+              <Box sx={{ p: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>
+            ) : !presence ? (
+              <Alert severity="warning">
+                Merchant presence could not be loaded.{signalErrors.presence ? ` ${signalErrors.presence}` : ''}
+              </Alert>
             ) : presence.merchants.length > 0 ? (
-              <TableContainer component={Paper}>
+              <TableContainer component={Paper} sx={{ overflowX: 'auto' }}>
                 <Table size="small">
                   <TableHead>
                     <TableRow>
@@ -429,15 +642,20 @@ const Trends = () => {
               </TableContainer>
             ) : (
               <EmptyState
-                title="No merchant history yet"
+                title={scope ? 'No merchant history for this market and location' : 'No merchant history yet'}
                 description={presence?.detail ?? 'Run a Competitors search to begin recording merchant presence.'}
                 icon={<TrendingUpOutlinedIcon sx={{ fontSize: 48, color: 'text.disabled' }} />}
               />
             )
           )}
 
+          {tab === 4 && !summary && (
+            <Alert severity="warning">
+              Contexts could not be loaded.{signalErrors.summary ? ` ${signalErrors.summary}` : ''}
+            </Alert>
+          )}
           {tab === 4 && summary && (
-            <TableContainer component={Paper}>
+            <TableContainer component={Paper} sx={{ overflowX: 'auto' }}>
               <Table size="small">
                 <TableHead>
                   <TableRow>

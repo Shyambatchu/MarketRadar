@@ -32,13 +32,14 @@ export const searchCompetitors = async (
 
 /** Saved competitors. Reads the database only -- spends no credit. */
 export const listCompetitors = async (
-  filters: { market?: string; location?: string; status?: string } = {},
+  filters: { market?: string; location?: string; status?: string; reviewStatus?: string } = {},
   signal?: AbortSignal,
 ): Promise<CompetitorListResponse> => {
   const params = new URLSearchParams();
   if (filters.market) params.append('market', filters.market);
   if (filters.location) params.append('location', filters.location);
   if (filters.status) params.append('status', filters.status);
+  if (filters.reviewStatus) params.append('review_status', filters.reviewStatus);
 
   const suffix = params.toString() ? `?${params.toString()}` : '';
   const response = await api.get<CompetitorListResponse>(
@@ -52,5 +53,18 @@ export const getCompetitor = async (
   signal?: AbortSignal,
 ): Promise<Competitor> => {
   const response = await api.get<Competitor>(`/competitors/${id}`, { signal });
+  return response.data;
+};
+
+/**
+ * Confirm, reject or rename a discovered business. A search result is never
+ * proof of competition; this records the user's decision (audited). Pass
+ * `review_status: 'unreviewed'` to clear it and an empty string to clear text.
+ */
+export const reviewCompetitor = async (
+  id: number,
+  update: { review_status?: 'confirmed' | 'rejected' | 'unreviewed'; display_name?: string; review_note?: string },
+): Promise<Competitor> => {
+  const response = await api.patch<Competitor>(`/competitors/${id}`, update);
   return response.data;
 };

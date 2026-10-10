@@ -5,12 +5,14 @@ import {
 } from 'recharts';
 
 import type { TrendSeries } from '../../types/trend';
+import { formatMoney } from '../../utils/format';
 
 const AVAILABILITY_LABEL: Record<string, string> = { '1': 'found', '0': 'unknown', '-1': 'not found' };
 
-const formatMetricValue = (metric: string, value: number | null): string => {
+const formatMetricValue = (metric: string, value: number | null, currency?: string | null): string => {
   if (value === null) return '—';
-  if (metric === 'price') return `$${value.toFixed(2)}`;
+  // The series' own currency, never an assumed '$'.
+  if (metric === 'price') return formatMoney(value, currency);
   if (metric === 'availability') return AVAILABILITY_LABEL[String(value)] ?? String(value);
   if (metric === 'position') return `#${value}`;
   return String(value);
@@ -87,7 +89,7 @@ const TrendChart = ({ series }: { series: TrendSeries }) => {
               allowDecimals={series.metric === 'price' || series.metric === 'rating'}
               domain={isAvailability ? [-1, 1] : ['auto', 'auto']}
               ticks={isAvailability ? [-1, 0, 1] : undefined}
-              tickFormatter={(v: number) => formatMetricValue(series.metric, v)}
+              tickFormatter={(v: number) => formatMetricValue(series.metric, v, series.currency)}
               width={isAvailability ? 72 : 56}
               tick={{ fontSize: 12, fill: theme.palette.text.secondary }} />
             <Tooltip
@@ -95,7 +97,7 @@ const TrendChart = ({ series }: { series: TrendSeries }) => {
               formatter={(v, _n, item) => {
                 const count = (item?.payload as { count?: number })?.count ?? 1;
                 return [
-                  `${formatMetricValue(series.metric, v as number)}${count > 1 ? ` (read ${count}×)` : ''}`,
+                  `${formatMetricValue(series.metric, v as number, series.currency)}${count > 1 ? ` (read ${count}×)` : ''}`,
                   series.metric,
                 ];
               }} />

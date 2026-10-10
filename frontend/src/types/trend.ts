@@ -22,6 +22,8 @@ export interface TrendPoint {
 export interface TrendSeries {
   subject: string;
   subject_id: number | null;
+  /** Price series only: the currency every point shares (null if unknown). */
+  currency?: string | null;
   metric: string;
   context: string | null;
 

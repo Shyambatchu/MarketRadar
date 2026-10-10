@@ -9,7 +9,8 @@ from app.routes.validation import (
     MAX_LIST_LIMIT, MAX_RESULTS_PER_SEARCH, require_range,
 )
 from app.schemas.competitor import (
-    Competitor, CompetitorListResponse, CompetitorSearchResponse,
+    Competitor, CompetitorListResponse, CompetitorReviewUpdate,
+    CompetitorSearchResponse,
 )
 from app.services.competitor_service import CompetitorService
 from app.services.location_service import LocationResolutionError
@@ -69,6 +70,7 @@ def list_competitors(
     market: Optional[str] = None,
     location: Optional[str] = None,
     status: Optional[str] = None,
+    review_status: Optional[str] = None,
     limit: int = 100,
     db: Session = Depends(get_db),
 ):
@@ -76,7 +78,8 @@ def list_competitors(
     require_range("limit", limit, 1, MAX_LIST_LIMIT)
     service = CompetitorService(db=db, organic_service=None)
     total, competitors = service.list_saved(
-        market=market, location_resolved=location, status=status, limit=limit)
+        market=market, location_resolved=location, status=status, limit=limit,
+        review_status=review_status)
     return CompetitorListResponse(total=total, competitors=competitors)
 
 
@@ -85,6 +88,28 @@ def get_competitor(competitor_id: int, db: Session = Depends(get_db)):
     """One competitor with its full discovery evidence. No provider request."""
     service = CompetitorService(db=db, organic_service=None)
     competitor = service.get_saved(competitor_id)
+    if competitor is None:
+        raise HTTPException(status_code=404, detail="Competitor not found.")
+    return competitor
+
+
+@router.patch("/{competitor_id}", response_model=Competitor)
+def review_competitor(competitor_id: int, update: CompetitorReviewUpdate,
+                      db: Session = Depends(get_db)):
+    """Confirm, reject or rename a discovered business.
+
+    A search result is never proof that a business is a competitor; this is
+    where the user decides. Only the review fields change, every change is
+    written to ``audit_events``, and a rejected business is skipped by
+    Products. No provider request.
+    """
+    service = CompetitorService(db=db, organic_service=None)
+    try:
+        competitor = service.review(competitor_id, review_status=update.review_status,
+                                    display_name=update.display_name,
+                                    review_note=update.review_note)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     if competitor is None:
         raise HTTPException(status_code=404, detail="Competitor not found.")
     return competitor

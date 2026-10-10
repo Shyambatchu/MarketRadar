@@ -35,6 +35,13 @@ class LocationResolutionSchema(BaseModel):
     alternatives: List[str] = []
 
 
+class RelatedQuestionSchema(BaseModel):
+    question: str
+    snippet: Optional[str] = None
+    title: Optional[str] = None
+    link: Optional[str] = None
+
+
 class SerpSearchResponseSchema(BaseModel):
     query: str
     # location is what the user asked for; resolved_location is what the
@@ -50,16 +57,26 @@ class SerpSearchResponseSchema(BaseModel):
     provider_status: str = "success"
     results: List[SerpSearchResultSchema]
     local_results: Optional[List[SerpLocalResultSchema]] = None
+    # Returned in the same Google response, so they cost nothing extra.
+    # Research leads, not evidence: a question shows what people ask.
+    related_questions: List[RelatedQuestionSchema] = []
+    related_searches: List[str] = []
 
 class BatchSearchRequest(BaseModel):
     queries: List[str]
     location: Optional[str] = None
     engine: str = "google"
 
+class BatchSearchError(BaseModel):
+    query: str
+    detail: str
+
+
 class BatchSearchResponse(BaseModel):
     total_requested: int
     successful: int
     failed: int
+    errors: List[BatchSearchError] = []
     results: List[SerpSearchResponseSchema]
 
 class UsageStatsResponse(BaseModel):
